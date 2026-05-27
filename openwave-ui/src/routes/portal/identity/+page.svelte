@@ -113,8 +113,9 @@
         ['bankCustomerRef',     'Customer Ref',   'Internal bank ID'],
       ] as [field, label, ph]}
         <div>
-          <label class="block text-[11px] text-white/35 mb-1.5 uppercase tracking-wider">{label}</label>
+          <label for={`enroll-${field}`} class="block text-[11px] text-white/35 mb-1.5 uppercase tracking-wider">{label}</label>
           <input
+            id={`enroll-${field}`}
             bind:value={enroll[field]}
             placeholder={ph}
             class="w-full bg-white/[0.05] border border-white/[0.1] rounded-xl px-3.5 py-2.5 text-[13px] text-white font-mono placeholder-white/20 focus:outline-none focus:border-indigo-500/60 transition-all"
@@ -155,13 +156,13 @@
     <div class="text-[12px] text-white/30 mb-4">Add another account to an existing identity</div>
     <div class="grid grid-cols-3 gap-3 items-end">
       <div>
-        <label class="block text-[11px] text-white/35 mb-1.5 uppercase tracking-wider">NPT Handle</label>
-        <input bind:value={linkHandle} placeholder="mtellesy"
+        <label for="link-handle" class="block text-[11px] text-white/35 mb-1.5 uppercase tracking-wider">NPT Handle</label>
+        <input id="link-handle" bind:value={linkHandle} placeholder="mtellesy"
           class="w-full bg-white/[0.05] border border-white/[0.1] rounded-xl px-3.5 py-2.5 text-[13px] text-white font-mono placeholder-white/20 focus:outline-none focus:border-indigo-500/60 transition-all"/>
       </div>
       <div>
-        <label class="block text-[11px] text-white/35 mb-1.5 uppercase tracking-wider">IBAN</label>
-        <input bind:value={linkIban} placeholder="LY92010500…"
+        <label for="link-iban" class="block text-[11px] text-white/35 mb-1.5 uppercase tracking-wider">IBAN</label>
+        <input id="link-iban" bind:value={linkIban} placeholder="LY92010500…"
           class="w-full bg-white/[0.05] border border-white/[0.1] rounded-xl px-3.5 py-2.5 text-[13px] text-white font-mono placeholder-white/20 focus:outline-none focus:border-indigo-500/60 transition-all"/>
       </div>
       <div class="space-y-2">
@@ -183,13 +184,13 @@
     <div class="text-[12px] text-white/30 mb-4">Remove an account from an identity</div>
     <div class="grid grid-cols-3 gap-3 items-end">
       <div>
-        <label class="block text-[11px] text-white/35 mb-1.5 uppercase tracking-wider">NPT Handle</label>
-        <input bind:value={unlinkHandle} placeholder="mtellesy"
+        <label for="unlink-handle" class="block text-[11px] text-white/35 mb-1.5 uppercase tracking-wider">NPT Handle</label>
+        <input id="unlink-handle" bind:value={unlinkHandle} placeholder="mtellesy"
           class="w-full bg-white/[0.05] border border-white/[0.1] rounded-xl px-3.5 py-2.5 text-[13px] text-white font-mono placeholder-white/20 focus:outline-none focus:border-red-500/60 transition-all"/>
       </div>
       <div>
-        <label class="block text-[11px] text-white/35 mb-1.5 uppercase tracking-wider">IBAN</label>
-        <input bind:value={unlinkIban} placeholder="LY83002700…"
+        <label for="unlink-iban" class="block text-[11px] text-white/35 mb-1.5 uppercase tracking-wider">IBAN</label>
+        <input id="unlink-iban" bind:value={unlinkIban} placeholder="LY83002700…"
           class="w-full bg-white/[0.05] border border-white/[0.1] rounded-xl px-3.5 py-2.5 text-[13px] text-white font-mono placeholder-white/20 focus:outline-none focus:border-red-500/60 transition-all"/>
       </div>
       <button onclick={doUnlink} disabled={unlinkLoading || !unlinkHandle || !unlinkIban}
@@ -205,13 +206,13 @@
     <div class="text-[12px] text-white/30 mb-4">Which IBAN resolves for <code class="text-white/40">handle@bank</code></div>
     <div class="grid grid-cols-3 gap-3 items-end">
       <div>
-        <label class="block text-[11px] text-white/35 mb-1.5 uppercase tracking-wider">NPT Handle</label>
-        <input bind:value={defHandle} placeholder="mtellesy"
+        <label for="default-iban-handle" class="block text-[11px] text-white/35 mb-1.5 uppercase tracking-wider">NPT Handle</label>
+        <input id="default-iban-handle" bind:value={defHandle} placeholder="mtellesy"
           class="w-full bg-white/[0.05] border border-white/[0.1] rounded-xl px-3.5 py-2.5 text-[13px] text-white font-mono placeholder-white/20 focus:outline-none focus:border-indigo-500/60 transition-all"/>
       </div>
       <div>
-        <label class="block text-[11px] text-white/35 mb-1.5 uppercase tracking-wider">IBAN</label>
-        <input bind:value={defIban} placeholder="LY83002700…"
+        <label for="default-iban" class="block text-[11px] text-white/35 mb-1.5 uppercase tracking-wider">IBAN</label>
+        <input id="default-iban" bind:value={defIban} placeholder="LY83002700…"
           class="w-full bg-white/[0.05] border border-white/[0.1] rounded-xl px-3.5 py-2.5 text-[13px] text-white font-mono placeholder-white/20 focus:outline-none focus:border-indigo-500/60 transition-all"/>
       </div>
       <button onclick={doSetDefaultIban} disabled={defLoading || !defHandle || !defIban}
@@ -227,13 +228,13 @@
     <div class="text-[12px] text-white/30 mb-4">Which bank resolves for bare <code class="text-white/40">handle</code></div>
     <div class="grid grid-cols-3 gap-3 items-end">
       <div>
-        <label class="block text-[11px] text-white/35 mb-1.5 uppercase tracking-wider">NPT Handle</label>
-        <input bind:value={defBankHandle} placeholder="mtellesy"
+        <label for="default-bank-handle" class="block text-[11px] text-white/35 mb-1.5 uppercase tracking-wider">NPT Handle</label>
+        <input id="default-bank-handle" bind:value={defBankHandle} placeholder="mtellesy"
           class="w-full bg-white/[0.05] border border-white/[0.1] rounded-xl px-3.5 py-2.5 text-[13px] text-white font-mono placeholder-white/20 focus:outline-none focus:border-indigo-500/60 transition-all"/>
       </div>
       <div>
-        <label class="block text-[11px] text-white/35 mb-1.5 uppercase tracking-wider">Bank</label>
-        <select bind:value={defBankSelected}
+        <label for="default-bank" class="block text-[11px] text-white/35 mb-1.5 uppercase tracking-wider">Bank</label>
+        <select id="default-bank" bind:value={defBankSelected}
           class="w-full bg-[#0d0d18] border border-white/[0.1] rounded-xl px-3.5 py-2.5 text-[13px] text-white focus:outline-none focus:border-indigo-500/60 transition-all">
           <option value="">Select bank</option>
           {#each banks as b}

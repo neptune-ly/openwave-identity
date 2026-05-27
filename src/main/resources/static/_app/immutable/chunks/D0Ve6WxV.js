@@ -1,0 +1,1 @@
+import{pt as e}from"./DD_qCfn5.js";e();

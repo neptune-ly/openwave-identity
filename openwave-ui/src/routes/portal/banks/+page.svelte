@@ -103,8 +103,9 @@
           ['contactEmail', 'Contact Email', 'ops@bank.ly'],
         ] as [field, label, ph]}
           <div>
-            <label class="block text-[11px] text-white/35 mb-1.5 uppercase tracking-wider">{label}</label>
+            <label for={`bank-${field}`} class="block text-[11px] text-white/35 mb-1.5 uppercase tracking-wider">{label}</label>
             <input
+              id={`bank-${field}`}
               bind:value={form[field]}
               placeholder={ph}
               class="w-full bg-white/[0.05] border border-white/[0.1] rounded-xl px-3.5 py-2.5 text-[13px] text-white font-mono placeholder-white/20 focus:outline-none focus:border-indigo-500/60 transition-all"

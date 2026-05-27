@@ -169,18 +169,19 @@
       <!-- Form -->
       <div class="space-y-4">
         <div>
-          <label class="block text-[11px] font-medium text-white/40 mb-1.5 uppercase tracking-wider">Username</label>
+          <label for="identity-username" class="block text-[11px] font-medium text-white/40 mb-1.5 uppercase tracking-wider">Username</label>
           <input
+            id="identity-username"
             bind:value={username}
             onkeydown={onKey}
             class="w-full bg-white/[0.05] border border-white/[0.1] rounded-xl px-4 py-3 text-[13px] text-white placeholder-white/20 focus:outline-none focus:border-indigo-500/60 focus:bg-white/[0.07] transition-all"
             placeholder={mode === 'admin' ? 'ow_admin' : 'andalus_admin'}
-            autofocus
           />
         </div>
         <div>
-          <label class="block text-[11px] font-medium text-white/40 mb-1.5 uppercase tracking-wider">Password</label>
+          <label for="identity-password" class="block text-[11px] font-medium text-white/40 mb-1.5 uppercase tracking-wider">Password</label>
           <input
+            id="identity-password"
             type="password"
             bind:value={password}
             onkeydown={onKey}
