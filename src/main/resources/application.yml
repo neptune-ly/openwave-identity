@@ -26,8 +26,8 @@ spring:
 registry:
   operator: "Neptune Fintech"
   operator-url: "https://www.neptune.ly"
-  governance-charter-url: "https://github.com/openwave-standard/openwave-spec/blob/main/GOVERNANCE.md"
-  source-code-url: "https://github.com/openwave-standard/openwave-identity"
+  governance-charter-url: "https://github.com/neptune-ly/openwave-spec/blob/main/GOVERNANCE.md"
+  source-code-url: "https://github.com/neptune-ly/openwave-identity"
   country-scope: "LY"
   future-operator: "Central Bank of Libya (planned)"
   uptime-sla: "99.9%"
