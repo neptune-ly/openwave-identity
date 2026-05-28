@@ -12,6 +12,8 @@ OpenWave Identity is the NPT handle registry. It must be operated as shared fina
 
 Hetzner Cloud is the cheapest practical VPS option for the first production launch. DigitalOcean is a good fallback when operational simplicity matters more than minimum cost. Avoid serverless-only hosting for the registry because the service needs stable database connectivity, predictable audit logging, and explicit operational control.
 
+For the first combined Astro + OpenWave Identity Hetzner launch, use the Docker Compose deployment in the Astro repository at `deploy/hetzner`.
+
 ## Mandatory environment variables
 
 ```bash
