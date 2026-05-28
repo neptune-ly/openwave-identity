@@ -10,6 +10,8 @@ import org.springframework.security.config.annotation.web.configuration.EnableWe
 import org.springframework.security.config.http.SessionCreationPolicy
 import org.springframework.security.core.authority.SimpleGrantedAuthority
 import org.springframework.security.core.context.SecurityContextHolder
+import org.springframework.security.core.userdetails.UserDetailsService
+import org.springframework.security.provisioning.InMemoryUserDetailsManager
 import org.springframework.security.web.SecurityFilterChain
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter
 import org.springframework.web.filter.OncePerRequestFilter
@@ -47,6 +49,8 @@ class SecurityConfig(
         http
             .cors { it.configurationSource(corsConfigurationSource()) }
             .csrf { it.disable() }
+            .httpBasic { it.disable() }
+            .formLogin { it.disable() }
             .sessionManagement { it.sessionCreationPolicy(SessionCreationPolicy.STATELESS) }
             .authorizeHttpRequests {
                 // Public endpoints — no auth
@@ -69,6 +73,9 @@ class SecurityConfig(
 
         return http.build()
     }
+
+    @Bean
+    fun userDetailsService(): UserDetailsService = InMemoryUserDetailsManager()
 }
 
 class ApiKeyFilter(
