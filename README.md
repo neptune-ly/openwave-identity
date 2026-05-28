@@ -169,26 +169,25 @@ cp .env.example .env
 ./gradlew bootRun
 ```
 
-The registry API starts on `http://localhost:8095` by default in the local OpenWave stack.
-The UI is served from `openwave-ui` during development.
+Set `SERVER_PORT` and `REGISTRY_ADMIN_KEY` explicitly for every environment. The UI is served from `openwave-ui` during development and can also be embedded in the registry service.
 
 ### Quick test
 
 ```bash
 # Register a bank (admin)
-curl -X POST http://localhost:8095/v1/banks \
+curl -X POST https://identity.example.com/v1/banks \
   -H "X-OpenWave-Registry-Key: your-admin-key" \
   -H "Content-Type: application/json" \
   -d '{"bank_handle":"andalus","display_name":"Andalus Bank","country":"LY","core_url":"https://api.andalus.ly","contact_email":"openwave@andalus.ly"}'
 
 # Claim a handle (bank-initiated)
-curl -X POST http://localhost:8095/v1/identity/claim \
+curl -X POST https://identity.example.com/v1/identity/claim \
   -H "X-OpenWave-Bank-Key: owbk_andalus_..." \
   -H "Content-Type: application/json" \
   -d '{"npt_handle":"mtellesy","iban":"LY83002700100099900001","customer_display_name":"Mohamed T.","bank_customer_ref":"CUST-001"}'
 
 # Resolve (public)
-curl http://localhost:8095/v1/identity/resolve?alias=mtellesy
+curl https://identity.example.com/v1/identity/resolve?alias=mtellesy
 ```
 
 ---

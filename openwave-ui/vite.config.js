@@ -1,7 +1,7 @@
 import { sveltekit } from '@sveltejs/kit/vite';
 import { defineConfig } from 'vite';
 
-const registryTarget = process.env.OPENWAVE_REGISTRY_PROXY_TARGET || 'http://localhost:8095';
+const registryTarget = process.env.OPENWAVE_REGISTRY_PROXY_TARGET || 'http://127.0.0.1:8095';
 
 export default defineConfig({
   plugins: [sveltekit()],

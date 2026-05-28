@@ -6,26 +6,24 @@
   import { get } from 'svelte/store';
   import { toast } from 'svelte-sonner';
   import axios from 'axios';
-  import { configuredRegistryUrl, savedRegistryUrl, saveRegistryOverride } from '$lib/config';
+  import { configuredRegistryUrl } from '$lib/config';
   import { theme } from '$lib/stores/theme';
   import Moon from 'lucide-svelte/icons/moon';
   import Sun from 'lucide-svelte/icons/sun';
 
-  let baseUrl   = $state(browser ? savedRegistryUrl() : configuredRegistryUrl());
+  let baseUrl   = $state(configuredRegistryUrl());
   let username  = $state('');
   let password  = $state('');
   let loading   = $state(false);
   let mode      = $state('admin');
-  let showEndpoint = $state(false);
   let currentTheme = $state('light');
 
   const unsubTheme = theme.subscribe(t => currentTheme = t);
   onDestroy(unsubTheme);
 
-  $effect(() => { if (browser) baseUrl = saveRegistryOverride(baseUrl); });
-
   onMount(() => {
     theme.init();
+    if (browser) baseUrl = configuredRegistryUrl();
     const s = get(auth);
     if (s?.role) goto('/portal');
   });
@@ -175,7 +173,7 @@
             bind:value={username}
             onkeydown={onKey}
             class="w-full bg-white/[0.05] border border-white/[0.1] rounded-xl px-4 py-3 text-[13px] text-white placeholder-white/20 focus:outline-none focus:border-indigo-500/60 focus:bg-white/[0.07] transition-all"
-            placeholder={mode === 'admin' ? 'ow_admin' : 'andalus_admin'}
+            placeholder="Portal username"
           />
         </div>
         <div>
@@ -220,28 +218,9 @@
         {/if}
       </div>
 
-      <div class="mt-4 rounded-xl border border-white/[0.06] bg-white/[0.015]">
-        <button
-          onclick={() => showEndpoint = !showEndpoint}
-          class="w-full flex items-center justify-between px-4 py-3 text-[11px] text-white/30 hover:text-white/50 transition-colors"
-        >
-          <span>Registry endpoint</span>
-          <span class="font-mono">{showEndpoint ? 'Hide' : 'Advanced'}</span>
-        </button>
-        {#if showEndpoint}
-          <div class="px-4 pb-4">
-            <input
-              bind:value={baseUrl}
-              onkeydown={onKey}
-              class="w-full bg-white/[0.05] border border-white/[0.1] rounded-xl px-4 py-3 text-[13px] text-white font-mono placeholder-white/20 focus:outline-none focus:border-indigo-500/60 focus:bg-white/[0.07] transition-all"
-              placeholder="/v1"
-            />
-            <p class="mt-2 text-[11px] text-white/25">
-              Default is deployment-configured. Use this only for local development or support diagnostics.
-            </p>
-          </div>
-        {/if}
-      </div>
+      <p class="mt-4 text-[11px] text-white/25 leading-relaxed">
+        Registry endpoint and operator access are configured by deployment. No API keys are required for portal sign-in.
+      </p>
     </div>
   </div>
 </div>

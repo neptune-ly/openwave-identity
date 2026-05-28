@@ -31,7 +31,7 @@ registry:
   country-scope: "LY"
   future-operator: "Central Bank of Libya (planned)"
   uptime-sla: "99.9%"
-  admin-key: ${REGISTRY_ADMIN_KEY:change-me-in-production}
+  admin-key: ${REGISTRY_ADMIN_KEY}
   resolve-cache-ttl-seconds: 60
   resolve-rate-limit-per-minute: 120
 
