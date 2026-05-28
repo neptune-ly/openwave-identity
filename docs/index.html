@@ -1030,6 +1030,24 @@
       <section class="section">
         <p class="eyebrow">Payments, presented channels, and finance</p>
         <h2>The registry gives a routing answer. Other OpenWave modules own the lifecycle.</h2>
+        <div class="docs-grid" style="margin-bottom:16px">
+          <article class="panel">
+            <b>Bank callback boundary</b>
+            <p>
+              OpenWave Identity does not call bank callback endpoints. In a private-bank deployment,
+              a gateway may call a public bank edge such as Andalus, which forwards to Nexus and then
+              to the bank core. That is payment infrastructure, not registry infrastructure.
+            </p>
+          </article>
+          <article class="panel">
+            <b>Identity role</b>
+            <p>
+              Identity answers questions such as: who owns this NPT handle, which bank-qualified
+              alias was requested, and which bank/account route is currently active. OTP, push,
+              consent, execution, settlement, and webhooks happen outside the registry.
+            </p>
+          </article>
+        </div>
         <div class="table-wrap">
           <table>
             <thead>
@@ -1047,7 +1065,7 @@
               </tr>
               <tr>
                 <td>QR or NFC presented payment</td>
-                <td>Resolve any NPT alias embedded in or linked from the presentment.</td>
+                <td>Resolve any NPT alias embedded in or linked from the presentment. The QR parser and NFC claim flow belong to the presented-payment operator, not the registry.</td>
                 <td>Presented-payment operator handles creation, claim, auth, status, and expiry.</td>
               </tr>
               <tr>

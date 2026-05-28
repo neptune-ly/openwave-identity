@@ -89,6 +89,8 @@ The registry does **not** execute payments, hold funds, or replace gateway-to-ga
 
 The same boundary applies to presented payments. QR and NFC presentments may resolve an alias through OpenWave Identity, but the registry must not own presentment creation, claim state, session status, or customer authorization state.
 
+For EMV/NUMO-compatible OpenWave QR, Identity is not the QR parser and does not allocate QR tags. Banks, wallets, and gateways detect `LY.OPENWAVE` in the OpenWave QR template, claim the presentment with the operator, and only use Identity if an NPT alias needs to be resolved as part of the payment or mandate flow.
+
 The same boundary also applies to Credit & Finance. Identity may help a finance provider, gateway, bank, or wallet resolve an alias for account selection or repayment routing, but the registry must not store credit assessments, risk scores, finance offers, contracts, repayment schedules, or customer affordability data.
 
 Recommended production topology:
@@ -97,6 +99,25 @@ Recommended production topology:
 Merchant → Gateway A → OpenWave Identity
                     └→ Gateway B (OW-GIP) → Bank Core
 ```
+
+## Bank callback topology
+
+OpenWave Identity does not call bank callback endpoints, Nexus, Andalus, CBS, OTP, push, payment execution, or webhook delivery services.
+
+Those calls belong to payment gateways and bank middleware. In a private-bank deployment, a gateway such as Neptune Astro may be configured like this:
+
+```text
+Astro gateway → Andalus public edge → Nexus middleware → Bank core
+```
+
+Identity remains outside that callback path:
+
+```text
+Gateway / wallet / app → OpenWave Identity → routing answer
+Gateway / bank stack   → payment, consent, mandate, webhook, settlement lifecycle
+```
+
+This separation is intentional. The registry owns NPT handle truth and bank-scoped account links. It does not hold funds, execute transfers, collect OTP, host Open Banking consent, or proxy callbacks to bank systems.
 
 ---
 

@@ -168,6 +168,7 @@ class IdentityService(
         val identity = identityRepo.findByNptHandle(nptHandle) ?: throw IdentityNotFoundException(nptHandle)
         val link = linkedAccountRepo.findByIdentityIdAndIban(identity.id, iban)
             ?: throw AccountNotFoundException(iban)
+        if (link.bankHandle != bankHandle) throw AccountNotFoundException(iban)
         if (linkedAccountRepo.existsByIdentityIdAndIban(identity.id, newIban))
             throw AccountAlreadyLinkedException(newIban)
         link.iban = newIban
@@ -181,6 +182,7 @@ class IdentityService(
         val identity = identityRepo.findByNptHandle(nptHandle) ?: throw IdentityNotFoundException(nptHandle)
         val link = linkedAccountRepo.findByIdentityIdAndIban(identity.id, iban)
             ?: throw AccountNotFoundException(iban)
+        if (link.bankHandle != bankHandle) throw AccountNotFoundException(iban)
 
         val wasDefault = link.isDefault
         linkedAccountRepo.delete(link)
@@ -214,6 +216,7 @@ class IdentityService(
         val identity = identityRepo.findByNptHandle(nptHandle) ?: throw IdentityNotFoundException(nptHandle)
         val link = linkedAccountRepo.findByIdentityIdAndIban(identity.id, iban)
             ?: throw AccountNotFoundException(iban)
+        if (link.bankHandle != bankHandle) throw AccountNotFoundException(iban)
         // Clear existing default for this bank, then set new one
         linkedAccountRepo.clearBankDefaults(identity.id, bankHandle)
         link.isDefault = true

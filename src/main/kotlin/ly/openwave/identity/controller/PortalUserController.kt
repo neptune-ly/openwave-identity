@@ -5,6 +5,7 @@ import jakarta.validation.constraints.NotBlank
 import ly.openwave.identity.entity.PortalRole
 import ly.openwave.identity.entity.PortalUserEntity
 import ly.openwave.identity.security.callerBankHandle
+import ly.openwave.identity.service.CredentialResetNotification
 import ly.openwave.identity.service.PortalUserService
 import org.springframework.security.core.context.SecurityContextHolder
 import org.springframework.web.bind.annotation.*
@@ -48,7 +49,7 @@ class PortalUserController(private val portalUserService: PortalUserService) {
     @PostMapping("/{id}/reset-password")
     fun resetPassword(@PathVariable id: Long): PortalPasswordResetResponse {
         val result = portalUserService.resetPassword(id, isAdmin(), bankHandleOrNull())
-        return PortalPasswordResetResponse(result.user.toResponse(), result.temporaryPassword)
+        return PortalPasswordResetResponse(result.user.toResponse(), result.temporaryPassword, result.notification.toResponse())
     }
 
     private fun isAdmin(): Boolean =
@@ -89,7 +90,18 @@ data class PortalUserResponse(
 
 data class PortalUserListResponse(val users: List<PortalUserResponse>)
 data class PortalUserCreateResponse(val user: PortalUserResponse, val temporaryPassword: String)
-data class PortalPasswordResetResponse(val user: PortalUserResponse, val temporaryPassword: String)
+data class PortalPasswordResetResponse(
+    val user: PortalUserResponse,
+    val temporaryPassword: String,
+    val notification: CredentialResetNotificationResponse
+)
+
+data class CredentialResetNotificationResponse(
+    val status: String,
+    val channel: String?,
+    val fallback: String,
+    val message: String
+)
 
 fun PortalUserEntity.toResponse() = PortalUserResponse(
     id = id,
@@ -102,4 +114,11 @@ fun PortalUserEntity.toResponse() = PortalUserResponse(
     createdAt = createdAt,
     updatedAt = updatedAt,
     lastLoginAt = lastLoginAt
+)
+
+fun CredentialResetNotification.toResponse() = CredentialResetNotificationResponse(
+    status = status.name,
+    channel = channel?.name,
+    fallback = fallback.name,
+    message = message
 )

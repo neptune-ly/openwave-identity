@@ -12,7 +12,31 @@ import java.time.Instant
 
 data class PortalLoginResult(val user: PortalUserEntity)
 data class PortalUserCreateResult(val user: PortalUserEntity, val temporaryPassword: String)
-data class PortalPasswordResetResult(val user: PortalUserEntity, val temporaryPassword: String)
+data class PortalPasswordResetResult(
+    val user: PortalUserEntity,
+    val temporaryPassword: String,
+    val notification: CredentialResetNotification
+)
+
+data class CredentialResetNotification(
+    val status: CredentialResetNotificationStatus,
+    val channel: CredentialResetNotificationChannel?,
+    val fallback: CredentialResetFallback,
+    val message: String
+)
+
+enum class CredentialResetNotificationStatus {
+    NO_CHANNEL,
+    PROVIDER_NOT_CONFIGURED
+}
+
+enum class CredentialResetNotificationChannel {
+    EMAIL
+}
+
+enum class CredentialResetFallback {
+    ONE_TIME_DISPLAY
+}
 
 @Service
 class PortalUserService(
@@ -93,8 +117,26 @@ class PortalUserService(
         val temporaryPassword = generatePassword()
         user.passwordHash = encoder.encode(temporaryPassword)
         user.updatedAt = Instant.now()
-        return PortalPasswordResetResult(portalUserRepo.save(user), temporaryPassword)
+        val savedUser = portalUserRepo.save(user)
+        return PortalPasswordResetResult(savedUser, temporaryPassword, credentialResetNotification(savedUser))
     }
+
+    private fun credentialResetNotification(user: PortalUserEntity): CredentialResetNotification =
+        if (user.email.isNullOrBlank()) {
+            CredentialResetNotification(
+                status = CredentialResetNotificationStatus.NO_CHANNEL,
+                channel = null,
+                fallback = CredentialResetFallback.ONE_TIME_DISPLAY,
+                message = "No credential notification channel is configured for this user. The temporary password is returned for one-time display to the authorized operator."
+            )
+        } else {
+            CredentialResetNotification(
+                status = CredentialResetNotificationStatus.PROVIDER_NOT_CONFIGURED,
+                channel = CredentialResetNotificationChannel.EMAIL,
+                fallback = CredentialResetFallback.ONE_TIME_DISPLAY,
+                message = "The user has an email address, but no credential notification provider is configured. The temporary password is returned for one-time display to the authorized operator."
+            )
+        }
 
     private fun validateRoleScope(role: PortalRole, bankHandle: String?, callerAdmin: Boolean, callerBankHandle: String?) {
         val registryRole = role.name.startsWith("REGISTRY_")

@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-BLOCKED_REGEX='AGENT_CONTEXT|Codex|OpenAI|ChatGPT|AI[ -]generated|(^|[^[:alnum:]_])GPT([^[:alnum:]_]|$)'
+BLOCKED_REGEX='AGENT_CONTEXT|Codex|OpenAI|ChatGPT|X-Astro-Key|AI[ -]generated|(^|[^[:alnum:]_])GPT([^[:alnum:]_]|$)'
 
 matches=0
 found_files=0

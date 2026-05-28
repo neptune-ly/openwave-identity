@@ -233,6 +233,7 @@ select option {
 
 .identity-hero,
 .identity-docs,
+.identity-topology,
 .identity-rules {
   width: min(1120px, calc(100% - 32px));
   margin: 0 auto;
@@ -299,6 +300,8 @@ select option {
 .identity-panel,
 .identity-grid article,
 .identity-docs,
+.identity-topology,
+.identity-boundary-table article,
 .identity-rules {
   background: #fff;
   border: 1px solid #dce6ea;
@@ -408,6 +411,95 @@ select option {
   line-height: 1.65;
 }
 
+.identity-topology {
+  margin-top: 20px;
+  display: grid;
+  grid-template-columns: minmax(260px, 0.82fr) minmax(320px, 1fr);
+  gap: 26px;
+  padding: 28px;
+}
+
+.identity-topology h2 {
+  margin: 0 0 12px;
+  color: #071821;
+  font-size: 34px;
+  letter-spacing: 0;
+}
+
+.identity-topology p {
+  color: #65777e;
+  line-height: 1.65;
+}
+
+.identity-topology code {
+  color: #07315F;
+  background: rgba(7, 49, 95, 0.08);
+  border-radius: 6px;
+  padding: 2px 7px;
+}
+
+.identity-flow-list {
+  display: grid;
+  gap: 12px;
+}
+
+.identity-flow-item {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+  padding: 14px;
+  border: 1px solid #dce6ea;
+  border-radius: 12px;
+  background: #fbfdfd;
+}
+
+.identity-flow-item span {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  color: #fff;
+  background: #07315F;
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.identity-flow-item p {
+  margin: 0;
+  font-size: 14px;
+}
+
+.identity-flow-item b {
+  display: block;
+  color: #071821;
+}
+
+.identity-boundary-table {
+  width: min(1120px, calc(100% - 32px));
+  margin: 14px auto 44px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.identity-boundary-table article {
+  padding: 20px;
+}
+
+.identity-boundary-table b {
+  display: block;
+  color: #07315F;
+  font-size: 16px;
+}
+
+.identity-boundary-table p {
+  margin: 10px 0 0;
+  color: #65777e;
+  line-height: 1.6;
+}
+
 .endpoint-list {
   display: grid;
   gap: 10px;
@@ -483,6 +575,8 @@ select option {
   .identity-hero,
   .identity-grid,
   .identity-docs,
+  .identity-topology,
+  .identity-boundary-table,
   .identity-rules > div {
     grid-template-columns: 1fr;
   }

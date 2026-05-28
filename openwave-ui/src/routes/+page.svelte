@@ -26,6 +26,12 @@
     'Resolution is public, but administration is bank-scoped or registry-admin scoped.',
     'The registry stores routing facts, not balances, transactions, or broad KYC records.'
   ];
+
+  const boundaryRows = [
+    ['OpenWave Identity', 'NPT handle ownership, bank-scoped account links, public resolution, bank directory.'],
+    ['Gateway or wallet', 'Checkout, presented payment claim, Open Banking consent handoff, remote gateway routing.'],
+    ['Bank stack', 'OTP, push approval, account validation, CBS execution, credit notification, webhook-originating bank events.']
+  ];
 </script>
 
 <svelte:head>
@@ -121,6 +127,41 @@
         </div>
       {/each}
     </div>
+  </section>
+
+  <section class="identity-topology">
+    <div>
+      <p class="identity-kicker">Deployment boundary</p>
+      <h2>Identity resolves aliases. It does not proxy bank callbacks.</h2>
+      <p>
+        Some bank deployments expose a public bank edge before private middleware, for example
+        <code>Astro -> Andalus -> Nexus</code>. That path is payment infrastructure. OpenWave
+        Identity stays outside it and only returns routing facts.
+      </p>
+    </div>
+    <div class="identity-flow-list">
+      <div class="identity-flow-item">
+        <span>1</span>
+        <p><b>Resolve</b> Gateway, wallet, or app asks Identity where an NPT alias routes.</p>
+      </div>
+      <div class="identity-flow-item">
+        <span>2</span>
+        <p><b>Route</b> Gateway decides whether the bank is local, remote, or reached through an edge.</p>
+      </div>
+      <div class="identity-flow-item">
+        <span>3</span>
+        <p><b>Authorize</b> OTP, push, consent, mandate approval, execution, and webhooks remain in the gateway and bank stack.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="identity-boundary-table">
+    {#each boundaryRows as row}
+      <article>
+        <b>{row[0]}</b>
+        <p>{row[1]}</p>
+      </article>
+    {/each}
   </section>
 
   <section class="identity-rules">
