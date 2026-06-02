@@ -58,6 +58,8 @@ For a full implementation, read the OpenWave spec pages:
 
 The bundled UI now includes a public registry/developer landing page plus a credential-based admin portal. API keys remain integration credentials; human portal access uses usernames, passwords, roles, and bank scoping.
 
+The production admin portal also manages bank branding for the public bank directory: approved display names, logo URLs, brand colors, support email, and website details. Branding helps gateways, wallets, and operators identify the bank behind a route; it does not change NPT ownership, account authority, SCA, payment execution, settlement, QR/NFC claim state, or merchant lifecycle state. Portal actions such as bank registration and branding changes are recorded in protected audit events.
+
 ---
 
 ## How it works
@@ -137,6 +139,9 @@ This separation is intentional. The registry owns NPT handle truth and bank-scop
 | `GET` | `/v1/banks` | None (public) | Bank phonebook |
 | `POST` | `/v1/banks` | Admin key | Register new bank |
 | `PATCH` | `/v1/banks/{handle}` | Admin key | Update bank |
+| `PATCH` | `/v1/banks/{handle}/branding` | Admin portal | Update public bank branding |
+| `POST` | `/v1/banks/{handle}/branding/logo` | Admin portal | Upload public bank logo |
+| `GET` | `/v1/portal/audit-events` | Admin portal | Review registry portal audit events |
 | `GET` | `/v1/registry/info` | None (public) | Registry metadata |
 
 Full spec: [`openwave-identity-v1.0.yaml`](https://github.com/neptune-ly/openwave-spec/blob/main/openwave-identity-v1.0.yaml)

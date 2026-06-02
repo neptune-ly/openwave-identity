@@ -1028,6 +1028,47 @@
       </section>
 
       <section class="section">
+        <p class="eyebrow">Production portal</p>
+        <h2>Bank branding is part of the registry phonebook, not a payment decision.</h2>
+        <div class="docs-grid" style="margin-bottom:16px">
+          <article class="panel">
+            <b>Public bank directory</b>
+            <p>
+              Participating banks can publish approved display names, logo URLs, brand colors,
+              support email, and website details through the registry bank profile. Public
+              directory responses expose this metadata so gateways, wallets, and developer tools
+              can identify banks consistently.
+            </p>
+          </article>
+          <article class="panel">
+            <b>Admin-controlled updates</b>
+            <p>
+              Bank branding is managed in the protected portal and through bank-profile API
+              endpoints. Uploaded assets are served from the registry asset surface, while API
+              keys remain one-time issuance credentials stored only as hashes.
+            </p>
+          </article>
+        </div>
+        <div class="docs-grid">
+          <article class="panel">
+            <b>Identity scope</b>
+            <p>
+              Branding helps users and operators recognize the bank behind a route. It does not
+              change handle ownership, account authority, settlement, SCA, QR/NFC claim state,
+              or merchant lifecycle state.
+            </p>
+          </article>
+          <article class="panel">
+            <b>Audit surface</b>
+            <p>
+              Registry portal actions such as bank registration, bank-profile changes, and bank
+              branding changes are written to portal audit events for operator review.
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section">
         <p class="eyebrow">Payments, presented channels, and finance</p>
         <h2>The registry gives a routing answer. Other OpenWave modules own the lifecycle.</h2>
         <div class="docs-grid" style="margin-bottom:16px">
@@ -1130,6 +1171,9 @@
           <div class="endpoint"><span class="method">POST</span><code>/v1/identity/{handle}/accounts</code><p>Link a bank-owned account to an existing handle.</p></div>
           <div class="endpoint"><span class="method">PATCH</span><code>/v1/identity/{handle}/default</code><p>Set the customer default receiving account.</p></div>
           <div class="endpoint"><span class="method">GET</span><code>/v1/banks</code><p>Public participating bank directory and routing phonebook.</p></div>
+          <div class="endpoint"><span class="method">PATCH</span><code>/v1/banks/{bankHandle}/branding</code><p>Protected bank branding metadata update for portal administrators.</p></div>
+          <div class="endpoint"><span class="method">POST</span><code>/v1/banks/{bankHandle}/branding/logo</code><p>Protected bank logo upload for the public bank directory.</p></div>
+          <div class="endpoint"><span class="method">GET</span><code>/v1/portal/audit-events</code><p>Protected portal audit trail for registry operators.</p></div>
           <div class="endpoint"><span class="method">GET</span><code>/v1/registry/info</code><p>Registry operator, governance, and source metadata.</p></div>
         </div>
       </section>
