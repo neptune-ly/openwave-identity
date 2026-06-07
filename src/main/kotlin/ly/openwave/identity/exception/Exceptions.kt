@@ -5,6 +5,7 @@ import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.MethodArgumentNotValidException
 import org.springframework.web.bind.annotation.ExceptionHandler
 import org.springframework.web.bind.annotation.RestControllerAdvice
+import org.springframework.web.server.ResponseStatusException
 
 sealed class RegistryException(val code: String, message: String, val status: HttpStatus) :
     RuntimeException(message)
@@ -46,6 +47,13 @@ class GlobalExceptionHandler {
     fun handleValidation(ex: MethodArgumentNotValidException): ResponseEntity<ErrorResponse> {
         val msg = ex.bindingResult.fieldErrors.joinToString("; ") { "${it.field}: ${it.defaultMessage}" }
         return ResponseEntity.badRequest().body(ErrorResponse("VALIDATION_ERROR", msg))
+    }
+
+    @ExceptionHandler(ResponseStatusException::class)
+    fun handleResponseStatus(ex: ResponseStatusException): ResponseEntity<ErrorResponse> {
+        val code = (ex.statusCode as? HttpStatus)?.name ?: "HTTP_${ex.statusCode.value()}"
+        val message = ex.reason ?: "Request could not be completed"
+        return ResponseEntity.status(ex.statusCode).body(ErrorResponse(code, message))
     }
 
     @ExceptionHandler(Exception::class)

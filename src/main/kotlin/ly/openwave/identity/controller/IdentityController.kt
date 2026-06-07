@@ -1,22 +1,30 @@
 package ly.openwave.identity.controller
 
+import com.fasterxml.jackson.annotation.JsonAlias
 import jakarta.validation.Valid
+import jakarta.validation.constraints.Email
 import jakarta.validation.constraints.NotBlank
 import jakarta.validation.constraints.Pattern
 import jakarta.validation.constraints.Size
 import jakarta.validation.constraints.Digits
+import ly.openwave.identity.config.RegistryProperties
 import ly.openwave.identity.entity.IdentityEntity
 import ly.openwave.identity.entity.LinkedAccountEntity
 import ly.openwave.identity.security.callerBankHandle
 import ly.openwave.identity.service.IdentityService
+import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpStatus
+import org.springframework.http.MediaType
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.*
 import java.time.Instant
 
 @RestController
 @RequestMapping("/identity")
-class IdentityController(private val identityService: IdentityService) {
+class IdentityController(
+    private val identityService: IdentityService,
+    private val registryProperties: RegistryProperties
+) {
 
     @PostMapping("/claim")
     fun claim(@Valid @RequestBody req: ClaimHandleRequest): ResponseEntity<IdentityResponse> {
@@ -30,7 +38,8 @@ class IdentityController(private val identityService: IdentityService) {
             bankCustomerRef = req.bankCustomerRef,
             setAsDefault    = req.setAsDefault ?: true,
             nationalId      = req.nationalId,
-            phone           = req.phone
+            phone           = req.phone,
+            email           = req.customerEmail
         )
         return ResponseEntity.status(if (wasNew) HttpStatus.CREATED else HttpStatus.OK).body(identity.toResponse())
     }
@@ -59,37 +68,37 @@ class IdentityController(private val identityService: IdentityService) {
 
     @GetMapping("/accounts")
     fun listCallerBankAliases(
-        @RequestParam(required = false, defaultValue = "true") activeOnly: Boolean
-    ): BankAliasesResponse {
+        @RequestParam(required = false, defaultValue = "true") activeOnly: Boolean,
+        @RequestParam(required = false, defaultValue = "0") page: Int,
+        @RequestParam(required = false, defaultValue = "100") limit: Int,
+        @RequestParam(required = false) search: String?,
+        @RequestParam(required = false, defaultValue = "json") format: String
+    ): ResponseEntity<Any> {
         val bankHandle = callerBankHandle()
-        val identities = identityService.listAliasesForBank(bankHandle, activeOnly)
-        return BankAliasesResponse(
-            bankHandle = bankHandle,
-            total = identities.size,
-            aliases = identities.map { identity ->
-                val bankAccounts = identity.linkedAccounts
-                    .filter { it.bankHandle == bankHandle }
-                    .sortedWith(compareByDescending<LinkedAccountEntity> { it.isDefault }.thenBy { it.id })
-                BankAliasResponse(
-                    alias = "${identity.nptHandle}@$bankHandle",
-                    aliasUsername = identity.nptHandle,
-                    fullAlias = "${identity.nptHandle}@$bankHandle",
-                    customerId = bankAccounts.firstOrNull()?.bankCustomerRef ?: "",
-                    customerPhone = identity.phone,
-                    isActive = identity.status == ly.openwave.identity.entity.IdentityStatus.ACTIVE,
-                    enrolledAt = bankAccounts.firstOrNull()?.linkedAt ?: identity.createdAt,
-                    accounts = bankAccounts.map { account ->
-                        BankAliasAccountResponse(
-                            accountId = account.id,
-                            ibanMasked = maskIban(account.iban),
-                            accountName = account.displayName,
-                            currency = account.currency,
-                            isDefault = account.isDefault
-                        )
-                    }
-                )
-            }
+        val csvExport = format.equals("csv", ignoreCase = true)
+        val identities = identityService.searchAliasesForBank(
+            callerBankHandle = bankHandle,
+            activeOnly = activeOnly,
+            search = search,
+            page = page,
+            limit = limit,
+            maxLimit = if (csvExport) 1_000 else 100
         )
+        val aliases = identities.content.map { it.toBankAliasResponse(bankHandle) }
+        if (csvExport) {
+            return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"openwave-identity-bank-aliases.csv\"")
+                .contentType(MediaType.parseMediaType("text/csv; charset=utf-8"))
+                .body(bankAliasesCsv(aliases))
+        }
+        return ResponseEntity.ok(BankAliasesResponse(
+            bankHandle = bankHandle,
+            total = identities.totalElements,
+            page = identities.number,
+            limit = identities.size,
+            totalPages = identities.totalPages,
+            aliases = aliases
+        ))
     }
 
     @PostMapping("/{nptHandle}/accounts")
@@ -172,6 +181,42 @@ class IdentityController(private val identityService: IdentityService) {
             updatedAt         = identity.updatedAt
         )
     }
+
+    @GetMapping("/internal/phone-lookup")
+    fun lookupByPhone(
+        @RequestHeader("X-OpenWave-Registry-Key", required = false) registryKey: String?,
+        @RequestParam phone: String
+    ): PhoneLookupResponse {
+        if (registryProperties.adminKey.isBlank() || registryKey != registryProperties.adminKey) {
+            throw org.springframework.web.server.ResponseStatusException(
+                HttpStatus.FORBIDDEN,
+                "Server-to-server registry key required"
+            )
+        }
+        val identity = identityService.getIdentityByPhone(phone)
+        val accounts = identity.linkedAccounts
+            .filter { identity.status == ly.openwave.identity.entity.IdentityStatus.ACTIVE }
+            .sortedWith(compareByDescending<LinkedAccountEntity> { it.isDefault }.thenBy { it.id })
+        return PhoneLookupResponse(
+            resolved = accounts.isNotEmpty(),
+            nptHandle = identity.nptHandle,
+            displayName = identity.displayName,
+            phoneMasked = maskPhone(identity.phone),
+            accounts = accounts.map {
+                PhoneLookupAccountResponse(
+                    alias = "${identity.nptHandle}@${it.bankHandle}",
+                    aliasUsername = identity.nptHandle,
+                    bankHandle = it.bankHandle,
+                    iban = it.iban,
+                    ibanMasked = maskIban(it.iban),
+                    accountName = it.displayName,
+                    currency = it.currency,
+                    isDefault = it.isDefault,
+                    linkedAt = it.linkedAt
+                )
+            }
+        )
+    }
 }
 
 // ─── DTOs ────────────────────────────────────────────────────────────────────
@@ -190,7 +235,12 @@ data class ClaimHandleRequest(
     val nationalId: String? = null,
 
     @field:Pattern(regexp = "^[0-9+\\-]{7,20}$", message = "Invalid phone number format")
-    val phone: String? = null
+    @JsonAlias("customer_phone")
+    val phone: String? = null,
+
+    @field:Email
+    @JsonAlias("customer_email")
+    val customerEmail: String? = null
 )
 
 data class LinkAccountRequest(
@@ -208,7 +258,10 @@ data class SetDefaultBankRequest(@field:NotBlank val bankHandle: String)
 
 data class BankAliasesResponse(
     val bankHandle: String,
-    val total: Int,
+    val total: Long,
+    val page: Int = 0,
+    val limit: Int = 100,
+    val totalPages: Int = 1,
     val aliases: List<BankAliasResponse>
 )
 
@@ -271,6 +324,26 @@ data class SetDefaultResponse(
     val updatedAt: Instant
 )
 
+data class PhoneLookupResponse(
+    val resolved: Boolean,
+    val nptHandle: String,
+    val displayName: String,
+    val phoneMasked: String?,
+    val accounts: List<PhoneLookupAccountResponse>
+)
+
+data class PhoneLookupAccountResponse(
+    val alias: String,
+    val aliasUsername: String,
+    val bankHandle: String,
+    val iban: String,
+    val ibanMasked: String,
+    val accountName: String?,
+    val currency: String,
+    val isDefault: Boolean,
+    val linkedAt: Instant
+)
+
 // ─── Mappers ─────────────────────────────────────────────────────────────────
 
 fun IdentityEntity.toResponse() = IdentityResponse(
@@ -283,6 +356,30 @@ fun IdentityEntity.toResponse() = IdentityResponse(
     createdAt         = createdAt,
     updatedAt         = updatedAt
 )
+
+private fun IdentityEntity.toBankAliasResponse(bankHandle: String): BankAliasResponse {
+    val bankAccounts = linkedAccounts
+        .filter { it.bankHandle == bankHandle }
+        .sortedWith(compareByDescending<LinkedAccountEntity> { it.isDefault }.thenBy { it.id })
+    return BankAliasResponse(
+        alias = "$nptHandle@$bankHandle",
+        aliasUsername = nptHandle,
+        fullAlias = "$nptHandle@$bankHandle",
+        customerId = bankAccounts.firstOrNull()?.bankCustomerRef ?: "",
+        customerPhone = phone,
+        isActive = status == ly.openwave.identity.entity.IdentityStatus.ACTIVE,
+        enrolledAt = bankAccounts.firstOrNull()?.linkedAt ?: createdAt,
+        accounts = bankAccounts.map { account ->
+            BankAliasAccountResponse(
+                accountId = account.id,
+                ibanMasked = maskIban(account.iban),
+                accountName = account.displayName,
+                currency = account.currency,
+                isDefault = account.isDefault
+            )
+        }
+    )
+}
 
 fun IdentityEntity.toPublicProfile(accountCount: Int) = PublicProfileResponse(
     nptHandle        = nptHandle,
@@ -305,3 +402,56 @@ fun LinkedAccountEntity.toResponse() = LinkedAccountResponse(
 private fun maskIban(iban: String): String =
     if (iban.length <= 10) iban
     else "${iban.take(6)}...${iban.takeLast(4)}"
+
+private fun maskPhone(phone: String?): String? {
+    val digits = phone?.filter(Char::isDigit)?.takeIf { it.isNotBlank() } ?: return null
+    return if (digits.length <= 4) "***" else "***${digits.takeLast(4)}"
+}
+
+private fun bankAliasesCsv(rows: List<BankAliasResponse>): String {
+    val lines = mutableListOf(
+        listOf(
+            "alias",
+            "alias_username",
+            "customer_ref",
+            "phone_masked",
+            "status",
+            "enrolled_at",
+            "account_count",
+            "account_ids",
+            "account_names",
+            "currencies",
+            "default_account_ids",
+            "iban_masked"
+        ).joinToString(",")
+    )
+    rows.forEach { row ->
+        lines += listOf(
+            row.fullAlias,
+            row.aliasUsername,
+            maskSensitiveReference(row.customerId),
+            maskPhone(row.customerPhone),
+            if (row.isActive) "ACTIVE" else "INACTIVE",
+            row.enrolledAt,
+            row.accounts.size,
+            row.accounts.joinToString("|") { it.accountId.toString() },
+            row.accounts.joinToString("|") { it.accountName ?: "" },
+            row.accounts.joinToString("|") { it.currency },
+            row.accounts.filter { it.isDefault }.joinToString("|") { it.accountId.toString() },
+            row.accounts.joinToString("|") { it.ibanMasked }
+        ).joinToString(",") { csvCell(it) }
+    }
+    return lines.joinToString("\n") + "\n"
+}
+
+private fun csvCell(value: Any?): String {
+    val text = value?.toString() ?: ""
+    val escaped = text.replace("\"", "\"\"")
+    return "\"$escaped\""
+}
+
+private fun maskSensitiveReference(value: String?): String {
+    val text = value ?: return ""
+    return Regex("LY[0-9A-Z]{13,32}", RegexOption.IGNORE_CASE)
+        .replace(text) { match -> maskIban(match.value.uppercase()) }
+}

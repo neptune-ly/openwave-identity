@@ -30,7 +30,7 @@ class PortalUserController(private val portalUserService: PortalUserService) {
             callerAdmin = isAdmin(),
             callerBankHandle = bankHandleOrNull()
         )
-        return PortalUserCreateResponse(result.user.toResponse(), result.temporaryPassword)
+        return PortalUserCreateResponse(result.user.toResponse(), result.temporaryPassword, result.notification.toResponse())
     }
 
     @PatchMapping("/{id}")
@@ -89,7 +89,11 @@ data class PortalUserResponse(
 )
 
 data class PortalUserListResponse(val users: List<PortalUserResponse>)
-data class PortalUserCreateResponse(val user: PortalUserResponse, val temporaryPassword: String)
+data class PortalUserCreateResponse(
+    val user: PortalUserResponse,
+    val temporaryPassword: String,
+    val notification: CredentialResetNotificationResponse
+)
 data class PortalPasswordResetResponse(
     val user: PortalUserResponse,
     val temporaryPassword: String,

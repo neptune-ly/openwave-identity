@@ -29,6 +29,10 @@ function createAuthStore() {
       const s = { role: 'BANK', portalRole, bankKey, bankHandle, username, sessionToken, baseUrl: baseUrl || configuredRegistryUrl() };
       set(s); saveSession(s);
     },
+    loginCustomer(baseUrl, username, sessionToken = null, portalRole = 'CUSTOMER') {
+      const s = { role: 'CUSTOMER', portalRole, username, sessionToken, baseUrl: baseUrl || configuredRegistryUrl() };
+      set(s); saveSession(s);
+    },
     logout() { set(null); saveSession(null); },
     get current() { return get({ subscribe }); }
   };

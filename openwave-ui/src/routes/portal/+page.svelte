@@ -3,6 +3,7 @@
   import { auth } from '$lib/stores/auth';
   import { apiCall, apiPublic } from '$lib/api/client';
   import { get } from 'svelte/store';
+  import { goto } from '$app/navigation';
 
   let info     = $state(null);
   let banks    = $state([]);
@@ -16,6 +17,14 @@
 
   onMount(async () => {
     session = get(auth);
+    if (session?.role === 'CUSTOMER') {
+      goto('/portal/customer');
+      return;
+    }
+    if (session?.role === 'BANK') {
+      goto('/portal/reports');
+      return;
+    }
     const [r1, r2] = await Promise.all([
       apiPublic('/registry/info'),
       apiPublic('/banks'),

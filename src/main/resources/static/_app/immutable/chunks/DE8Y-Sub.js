@@ -1,0 +1,1 @@
+var e=void 0;function t(e){if(!e||typeof e!=`string`)return null;let t=e.trim().replace(/\/+$/,``);if(!t)return null;if(t.startsWith(`/`))return t;try{return new URL(t).toString().replace(/\/+$/,``)}catch{return null}}function n(){return t(typeof window<`u`?window.OPENWAVE_REGISTRY_URL:null)||t(e)||`/v1`}export{n as t};

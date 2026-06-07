@@ -10,6 +10,7 @@
   import { theme } from '$lib/stores/theme';
   import Moon from 'lucide-svelte/icons/moon';
   import Sun from 'lucide-svelte/icons/sun';
+  import KeyRound from 'lucide-svelte/icons/key-round';
 
   let baseUrl   = $state(configuredRegistryUrl());
   let username  = $state('');
@@ -17,6 +18,9 @@
   let loading   = $state(false);
   let mode      = $state('admin');
   let currentTheme = $state('light');
+  let recoveryMode = $state(false);
+  let recoverySent = $state(false);
+  let passkeySupported = $state(false);
 
   const unsubTheme = theme.subscribe(t => currentTheme = t);
   onDestroy(unsubTheme);
@@ -24,6 +28,7 @@
   onMount(() => {
     theme.init();
     if (browser) baseUrl = configuredRegistryUrl();
+    passkeySupported = browser && !!window.PublicKeyCredential && window.isSecureContext;
     const s = get(auth);
     if (s?.role) goto('/portal');
   });
@@ -37,12 +42,16 @@
       const r = await axios.post(baseUrl + '/auth/login', {
         username: username.trim(),
         password,
-        role: mode === 'admin' ? 'ADMIN' : 'BANK'
+        role: mode === 'admin' ? 'ADMIN' : mode === 'customer' ? 'CUSTOMER' : 'BANK'
       });
       const session = r.data;
       if (session.role === 'ADMIN') {
         auth.loginAdmin(null, baseUrl, session.username, session.sessionToken, session.portalRole);
         toast.success('Connected as Registry Admin');
+        goto('/portal');
+      } else if (session.role === 'CUSTOMER') {
+        auth.loginCustomer(baseUrl, session.username, session.sessionToken, session.portalRole);
+        toast.success('Connected as Customer');
         goto('/portal');
       } else {
         auth.loginBank(null, session.bankHandle || '', baseUrl, session.username, session.sessionToken, session.portalRole);
@@ -65,6 +74,83 @@
 
   function onKey(e) {
     if (e.key === 'Enter') connect();
+  }
+
+  async function requestReset() {
+    if (!username.trim()) { toast.error('Enter your username or email first'); return; }
+    loading = true;
+    try {
+      await axios.post(baseUrl + '/auth/password-reset/request', { usernameOrEmail: username.trim() });
+      recoverySent = true;
+      toast.success('If the account has email configured, a secure reset link was sent.');
+    } catch (e) {
+      toast.error(e.response?.data?.message || e.response?.data?.error || 'Could not send reset link');
+    } finally {
+      loading = false;
+    }
+  }
+
+  async function loginWithPasskey() {
+    if (!passkeySupported) { toast.error('Passkeys are available only on secure browsers that support WebAuthn.'); return; }
+    loading = true;
+    try {
+      const optionsResponse = await axios.post(baseUrl + '/auth/passkey/options/authenticate', {});
+      const requestOptions = JSON.parse(optionsResponse.data.options);
+      requestOptions.publicKey.challenge = base64UrlToBuffer(requestOptions.publicKey.challenge);
+      requestOptions.publicKey.allowCredentials = (requestOptions.publicKey.allowCredentials || []).map((cred) => ({
+        ...cred,
+        id: base64UrlToBuffer(cred.id)
+      }));
+      const credential = await navigator.credentials.get({ publicKey: requestOptions.publicKey });
+      const response = credential.response;
+      const payload = {
+        challenge: bufferToBase64Url(requestOptions.publicKey.challenge),
+        credential: JSON.stringify({
+          id: credential.id,
+          rawId: bufferToBase64Url(credential.rawId),
+          type: credential.type,
+          response: {
+            authenticatorData: bufferToBase64Url(response.authenticatorData),
+            clientDataJSON: bufferToBase64Url(response.clientDataJSON),
+            signature: bufferToBase64Url(response.signature),
+            userHandle: response.userHandle ? bufferToBase64Url(response.userHandle) : null
+          },
+          clientExtensionResults: credential.getClientExtensionResults()
+        })
+      };
+      const r = await axios.post(baseUrl + '/auth/passkey/authenticate', payload);
+      const session = r.data;
+      if (session.role === 'ADMIN') {
+        auth.loginAdmin(null, baseUrl, session.username, session.sessionToken, session.portalRole);
+        toast.success('Connected with passkey');
+      } else if (session.role === 'CUSTOMER') {
+        auth.loginCustomer(baseUrl, session.username, session.sessionToken, session.portalRole);
+        toast.success('Connected with passkey');
+      } else {
+        auth.loginBank(null, session.bankHandle || '', baseUrl, session.username, session.sessionToken, session.portalRole);
+        toast.success('Connected with passkey');
+      }
+      goto('/portal');
+    } catch (e) {
+      toast.error(e.response?.data?.message || e.response?.data?.error || e.message || 'Passkey sign in failed');
+    } finally {
+      loading = false;
+    }
+  }
+
+  function base64UrlToBuffer(value) {
+    const base64 = value.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(value.length / 4) * 4, '=');
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return bytes.buffer;
+  }
+
+  function bufferToBase64Url(value) {
+    const bytes = new Uint8Array(value);
+    let binary = '';
+    bytes.forEach((b) => binary += String.fromCharCode(b));
+    return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
   }
 </script>
 
@@ -135,8 +221,8 @@
       <div class="mb-8">
         <div class="flex items-start justify-between gap-4">
           <div>
-            <h1 class="text-2xl font-semibold text-white tracking-tight">Sign in</h1>
-            <p class="text-white/40 text-[13px] mt-1">Use your portal username and password</p>
+            <h1 class="text-2xl font-semibold text-white tracking-tight">{recoveryMode ? 'Reset password' : 'Sign in'}</h1>
+            <p class="text-white/40 text-[13px] mt-1">{recoveryMode ? 'Send a secure email link to reset your password' : 'Use your portal username and password'}</p>
           </div>
           <button
             onclick={() => theme.toggle()}
@@ -149,6 +235,7 @@
       </div>
 
       <!-- Mode toggle -->
+      {#if !recoveryMode}
       <div class="flex rounded-xl bg-white/[0.04] border border-white/[0.08] p-1 mb-6">
         <button
           onclick={() => mode = 'admin'}
@@ -162,9 +249,34 @@
             {mode === 'bank' ? 'bg-emerald-600 text-white shadow-sm' : 'text-white/40 hover:text-white/70'}">
           Bank Portal
         </button>
+        <button
+          onclick={() => mode = 'customer'}
+          class="flex-1 py-2 rounded-lg text-[13px] font-medium transition-all
+            {mode === 'customer' ? 'bg-sky-600 text-white shadow-sm' : 'text-white/40 hover:text-white/70'}">
+          Customer
+        </button>
       </div>
+      {/if}
 
       <!-- Form -->
+      {#if recoveryMode}
+      <div class="space-y-4">
+        <div>
+          <label for="identity-reset-username" class="block text-[11px] font-medium text-white/40 mb-1.5 uppercase tracking-wider">Username or email</label>
+          <input id="identity-reset-username" bind:value={username} class="w-full bg-white/[0.05] border border-white/[0.1] rounded-xl px-4 py-3 text-[13px] text-white placeholder-white/20 focus:outline-none focus:border-indigo-500/60 focus:bg-white/[0.07] transition-all" placeholder="Portal username or email"/>
+        </div>
+        {#if recoverySent}
+          <div class="rounded-xl border border-emerald-400/20 bg-emerald-400/[0.08] px-4 py-3 text-[13px] leading-relaxed text-emerald-100/85">
+            If the account exists, a one-time reset link has been emailed. Open the link to choose a new password.
+          </div>
+        {/if}
+        <button onclick={requestReset} disabled={loading || !username.trim() || recoverySent} class="w-full py-3 text-[14px] font-semibold text-white rounded-xl transition-all disabled:opacity-30 disabled:cursor-not-allowed bg-indigo-600 hover:bg-indigo-500">
+          {#if loading}<span class="inline-block w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin mr-2 align-middle"></span>{/if}
+          {recoverySent ? 'Reset link sent' : 'Send secure reset link'}
+        </button>
+        <button onclick={() => { recoveryMode = false; recoverySent = false; }} class="w-full py-3 text-[13px] font-semibold text-white/50 hover:text-white rounded-xl transition-all">Back to sign in</button>
+      </div>
+      {:else}
       <div class="space-y-4">
         <div>
           <label for="identity-username" class="block text-[11px] font-medium text-white/40 mb-1.5 uppercase tracking-wider">Username</label>
@@ -177,7 +289,12 @@
           />
         </div>
         <div>
-          <label for="identity-password" class="block text-[11px] font-medium text-white/40 mb-1.5 uppercase tracking-wider">Password</label>
+          <div class="flex items-center justify-between gap-3 mb-1.5">
+            <label for="identity-password" class="block text-[11px] font-medium text-white/40 uppercase tracking-wider">Password</label>
+            <button onclick={() => { recoveryMode = true; }} class="text-[11px] font-semibold text-indigo-300 hover:text-indigo-200 transition-colors">
+              Forgot password?
+            </button>
+          </div>
           <input
             id="identity-password"
             type="password"
@@ -203,7 +320,18 @@
             Connect to Registry
           {/if}
         </button>
+        <button
+          onclick={loginWithPasskey}
+          disabled={loading || !passkeySupported}
+          class="w-full py-3 text-[14px] font-semibold rounded-xl transition-all disabled:opacity-30 disabled:cursor-not-allowed border border-white/[0.10] text-white/75 hover:bg-white/[0.06] flex items-center justify-center gap-2">
+          <KeyRound class="w-4 h-4" />
+          Sign in with passkey
+        </button>
+        <button onclick={() => { recoveryMode = true; }} class="w-full py-2 text-[12px] font-semibold text-white/45 hover:text-white transition-all">
+          Send secure password reset link
+        </button>
       </div>
+      {/if}
 
       <!-- Role description -->
       <div class="mt-6 rounded-xl border border-white/[0.06] bg-white/[0.02] px-4 py-3">
@@ -219,7 +347,7 @@
       </div>
 
       <p class="mt-4 text-[11px] text-white/25 leading-relaxed">
-        Registry endpoint and operator access are configured by deployment. No API keys are required for portal sign-in.
+        Password reset links are short-lived, single-use, and sent only to the email on the account.
       </p>
     </div>
   </div>

@@ -8,12 +8,22 @@
   let session = $state(null);
   let banks   = $state([]);
 
-  let enroll      = $state({ nptHandle: '', iban: '', customerDisplayName: '', bankCustomerRef: '', setAsDefault: true });
+  let enroll      = $state({
+    nptHandle: '',
+    iban: '',
+    customerDisplayName: '',
+    bankCustomerRef: '',
+    nationalId: '',
+    phone: '',
+    customerEmail: '',
+    setAsDefault: true
+  });
   let enrollResult = $state(null);
   let enrollLoading = $state(false);
 
   let linkHandle  = $state('');
   let linkIban    = $state('');
+  let linkCustomerRef = $state('');
   let linkDefault = $state(false);
   let linkLoading = $state(false);
 
@@ -43,22 +53,36 @@
     enrollLoading = false;
     if (r.ok) {
       enrollResult = r.data;
-      enroll = { nptHandle: '', iban: '', customerDisplayName: '', bankCustomerRef: '', setAsDefault: true };
+      enroll = {
+        nptHandle: '',
+        iban: '',
+        customerDisplayName: '',
+        bankCustomerRef: '',
+        nationalId: '',
+        phone: '',
+        customerEmail: '',
+        setAsDefault: true
+      };
       toast.success('Handle claimed');
     } else toast.error(r.error);
   }
 
   async function doLink() {
     linkLoading = true;
-    const r = await apiCall('post', `/identity/${linkHandle}/accounts`, { iban: linkIban, setAsDefault: linkDefault });
+    const r = await apiCall('post', `/identity/${linkHandle}/accounts`, {
+      iban: linkIban,
+      bankCustomerRef: linkCustomerRef,
+      setAsDefault: linkDefault
+    });
     linkLoading = false;
-    if (r.ok) { linkHandle = ''; linkIban = ''; toast.success('IBAN linked'); }
+    if (r.ok) { linkHandle = ''; linkIban = ''; linkCustomerRef = ''; toast.success('IBAN linked'); }
     else toast.error(r.error);
   }
 
   async function doUnlink() {
     unlinkLoading = true;
-    const r = await apiCall('delete', `/identity/${unlinkHandle}/accounts/iban/${encodeURIComponent(unlinkIban)}`);
+    const query = isBank && session?.bankHandle ? `?bankHandle=${encodeURIComponent(session.bankHandle)}` : '';
+    const r = await apiCall('delete', `/identity/${unlinkHandle}/accounts/iban/${encodeURIComponent(unlinkIban)}${query}`);
     unlinkLoading = false;
     if (r.ok) { unlinkHandle = ''; unlinkIban = ''; toast.success('IBAN unlinked'); }
     else toast.error(r.error);
@@ -66,7 +90,8 @@
 
   async function doSetDefaultIban() {
     defLoading = true;
-    const r = await apiCall('patch', `/identity/${defHandle}/accounts/iban/${encodeURIComponent(defIban)}/set-default`);
+    const query = isBank && session?.bankHandle ? `?bankHandle=${encodeURIComponent(session.bankHandle)}` : '';
+    const r = await apiCall('patch', `/identity/${defHandle}/accounts/iban/${encodeURIComponent(defIban)}/set-default${query}`);
     defLoading = false;
     if (r.ok) toast.success('Default IBAN updated');
     else toast.error(r.error);
@@ -111,8 +136,11 @@
         ['customerDisplayName', 'Display Name',   'Full name'],
         ['iban',                'IBAN',            'LY83002700…'],
         ['bankCustomerRef',     'Customer Ref',   'Internal bank ID'],
+        ['nationalId',          'National ID',    '12 digits'],
+        ['phone',               'Phone',          '0911091195'],
+        ['customerEmail',       'Email',          'customer@example.com'],
       ] as [field, label, ph]}
-        <div>
+        <div class={field === 'customerEmail' ? 'col-span-2' : ''}>
           <label for={`enroll-${field}`} class="block text-[11px] text-white/35 mb-1.5 uppercase tracking-wider">{label}</label>
           <input
             id={`enroll-${field}`}
@@ -165,12 +193,17 @@
         <input id="link-iban" bind:value={linkIban} placeholder="LY92010500…"
           class="w-full bg-white/[0.05] border border-white/[0.1] rounded-xl px-3.5 py-2.5 text-[13px] text-white font-mono placeholder-white/20 focus:outline-none focus:border-indigo-500/60 transition-all"/>
       </div>
+      <div>
+        <label for="link-ref" class="block text-[11px] text-white/35 mb-1.5 uppercase tracking-wider">Customer Ref</label>
+        <input id="link-ref" bind:value={linkCustomerRef} placeholder="Internal bank ID"
+          class="w-full bg-white/[0.05] border border-white/[0.1] rounded-xl px-3.5 py-2.5 text-[13px] text-white font-mono placeholder-white/20 focus:outline-none focus:border-indigo-500/60 transition-all"/>
+      </div>
       <div class="space-y-2">
         <div class="flex items-center gap-2">
           <input type="checkbox" bind:checked={linkDefault} id="ld" class="w-4 h-4 accent-indigo-500"/>
           <label for="ld" class="text-[12px] text-white/35">Set as default</label>
         </div>
-        <button onclick={doLink} disabled={linkLoading || !linkHandle || !linkIban}
+        <button onclick={doLink} disabled={linkLoading || !linkHandle || !linkIban || !linkCustomerRef}
           class="w-full px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-30 text-white text-[13px] font-semibold rounded-xl transition-all">
           {linkLoading ? '…' : 'Link IBAN'}
         </button>

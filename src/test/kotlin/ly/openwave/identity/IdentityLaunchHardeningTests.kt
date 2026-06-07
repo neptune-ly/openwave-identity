@@ -7,6 +7,9 @@ import ly.openwave.identity.entity.LinkedAccountEntity
 import ly.openwave.identity.repository.BankRepository
 import ly.openwave.identity.repository.IdentityRepository
 import ly.openwave.identity.repository.LinkedAccountRepository
+import ly.openwave.identity.repository.PortalEmailOtpRepository
+import ly.openwave.identity.repository.PortalUserRepository
+import ly.openwave.identity.security.PortalTokenService
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -42,9 +45,14 @@ class IdentityLaunchHardeningTests {
     @Autowired lateinit var bankRepo: BankRepository
     @Autowired lateinit var identityRepo: IdentityRepository
     @Autowired lateinit var linkedAccountRepo: LinkedAccountRepository
+    @Autowired lateinit var portalUserRepo: PortalUserRepository
+    @Autowired lateinit var portalEmailOtpRepo: PortalEmailOtpRepository
+    @Autowired lateinit var portalTokenService: PortalTokenService
 
     @BeforeEach
     fun resetData() {
+        portalEmailOtpRepo.deleteAll()
+        portalUserRepo.deleteAll()
         linkedAccountRepo.deleteAll()
         identityRepo.deleteAll()
         bankRepo.deleteAll()
@@ -191,6 +199,161 @@ class IdentityLaunchHardeningTests {
         assertThat(response).doesNotContain("nationalId", "phone", "bankCustomerRef", "accounts", "linkedBanks")
     }
 
+    @Test
+    fun `internal phone lookup requires server to server registry key not portal admin session`() {
+        val bank = registerBank("phone-sec")
+        claim(
+            bank,
+            "phone-user",
+            "LY10101010101010101010",
+            displayName = "Phone Customer",
+            nationalId = "100000000006",
+            phone = "+218911000006"
+        )
+        val adminPortalSession = portalTokenService.issue(
+            subject = "neptune.admin",
+            role = "ADMIN",
+            bankHandle = null,
+            portalRole = "REGISTRY_ADMIN"
+        )
+
+        mockMvc.perform(
+            get("/identity/internal/phone-lookup")
+                .header("X-OpenWave-Portal-Session", adminPortalSession)
+                .queryParam("phone", "+218911000006")
+        ).andExpect(status().isForbidden)
+            .andExpect(jsonPath("$.code").value("FORBIDDEN"))
+
+        mockMvc.perform(
+            get("/identity/internal/phone-lookup")
+                .header("X-OpenWave-Registry-Key", "test-admin-key")
+                .queryParam("phone", "+218911000006")
+        ).andExpect(status().isOk)
+            .andExpect(jsonPath("$.resolved").value(true))
+            .andExpect(jsonPath("$.accounts[0].iban").value("LY10101010101010101010"))
+            .andExpect(jsonPath("$.accounts[0].ibanMasked").value("LY1010...1010"))
+    }
+
+    @Test
+    fun `bank alias report csv is bank scoped and support safe`() {
+        val bank = registerBank("csv-bank")
+        claim(
+            bank,
+            "csv-user",
+            "LY12121212121212121212",
+            displayName = "CSV Customer",
+            nationalId = "100000000007",
+            phone = "+218912000007"
+        )
+
+        val body = mockMvc.perform(
+            get("/identity/accounts")
+                .bankKey(bank.apiKey)
+                .queryParam("activeOnly", "false")
+                .queryParam("format", "csv")
+        ).andExpect(status().isOk)
+            .andReturn()
+            .response
+            .contentAsString
+
+        assertThat(body).contains("alias,alias_username,customer_ref,phone_masked,status")
+        assertThat(body).contains("csv-user@csv-bank")
+        assertThat(body).contains("LY1212...1212")
+        assertThat(body).contains("***0007")
+        assertThat(body).doesNotContain("LY12121212121212121212")
+        assertThat(body).doesNotContain("+218912000007")
+    }
+
+    @Test
+    fun `claim with customer email creates customer portal user and setup reset link`() {
+        val bank = registerBank("customer-access")
+
+        claim(
+            bank,
+            "email-user",
+            "LY13131313131313131313",
+            displayName = "Email Customer",
+            nationalId = "100000000008",
+            phone = "+218913000008",
+            customerEmail = "customer@example.test"
+        )
+
+        val portalUser = portalUserRepo.findByUsername("email-user")
+        assertThat(portalUser).isNotNull
+        assertThat(portalUser!!.role.name).isEqualTo("CUSTOMER")
+        assertThat(portalUser.email).isEqualTo("customer@example.test")
+        assertThat(portalUser.bankHandle).isNull()
+        val setupLink = portalEmailOtpRepo.findTopByUserAndPurposeOrderByCreatedAtDesc(
+            portalUser,
+            "PASSWORD_RESET_LINK"
+        )
+        assertThat(setupLink).isPresent
+        assertThat(setupLink.get().codeHash).doesNotContain("customer@example.test")
+        assertThat(setupLink.get().isValid()).isTrue()
+    }
+
+    @Test
+    fun `bank portal can update only its own support safe branding profile`() {
+        val bankA = registerBank("brand-a")
+        registerBank("brand-b")
+
+        mockMvc.perform(
+            patch("/banks/me/branding")
+                .bankKey(bankA.apiKey)
+                .jsonBody(
+                    mapOf(
+                        "displayName" to "Brand A Identity",
+                        "brandColor" to "#123ABC",
+                        "supportEmail" to "support@brand-a.example.test",
+                        "website" to "https://brand-a.example.test",
+                        "coreUrl" to "https://ignored.example.test",
+                        "active" to false
+                    )
+                )
+        ).andExpect(status().isOk)
+            .andExpect(jsonPath("$.bankHandle").value("brand-a"))
+            .andExpect(jsonPath("$.displayName").value("Brand A Identity"))
+            .andExpect(jsonPath("$.branding.brand_color").value("#123ABC"))
+            .andExpect(jsonPath("$.branding.support_email").value("support@brand-a.example.test"))
+            .andExpect(jsonPath("$.branding.website").value("https://brand-a.example.test"))
+            .andExpect(jsonPath("$.active").value(true))
+
+        mockMvc.perform(
+            patch("/banks/brand-b/branding")
+                .bankKey(bankA.apiKey)
+                .jsonBody(mapOf("displayName" to "Hijacked Bank"))
+        ).andExpect(status().isForbidden)
+
+        val updatedA = bankRepo.findByBankHandle("brand-a")!!
+        val unchangedB = bankRepo.findByBankHandle("brand-b")!!
+        assertThat(updatedA.displayName).isEqualTo("Brand A Identity")
+        assertThat(updatedA.coreUrl).isEqualTo("https://brand-a.example.test")
+        assertThat(updatedA.active).isTrue()
+        assertThat(unchangedB.displayName).isEqualTo("brand-b Bank")
+        assertThat(unchangedB.coreUrl).isEqualTo("https://brand-b.example.test")
+    }
+
+    @Test
+    fun `bank portal my bank profile is authenticated and scoped`() {
+        val bankA = registerBank("profile-a")
+        registerBank("profile-b")
+
+        mockMvc.perform(get("/banks/me"))
+            .andExpect(status().isForbidden)
+
+        mockMvc.perform(
+            get("/banks/me")
+                .header("X-OpenWave-Registry-Key", "test-admin-key")
+        ).andExpect(status().isForbidden)
+
+        mockMvc.perform(get("/banks/me").bankKey(bankA.apiKey))
+            .andExpect(status().isOk)
+            .andExpect(jsonPath("$.bankHandle").value("profile-a"))
+            .andExpect(jsonPath("$.coreUrl").value("https://profile-a.example.test"))
+            .andExpect(jsonPath("$.contactEmail").value("ops@profile-a.example.test"))
+            .andExpect(jsonPath("$.branding.support_email").value("ops@profile-a.example.test"))
+    }
+
     private fun registerBank(handle: String): BankCredentials {
         val body = mapOf(
             "bankHandle" to handle,
@@ -217,7 +380,8 @@ class IdentityLaunchHardeningTests {
         displayName: String = "Launch Customer",
         setAsDefault: Boolean = true,
         nationalId: String,
-        phone: String = "+218910000000"
+        phone: String = "+218910000000",
+        customerEmail: String? = null
     ) {
         mockMvc.perform(
             post("/identity/claim")
@@ -230,8 +394,9 @@ class IdentityLaunchHardeningTests {
                         "bankCustomerRef" to "cust-$iban",
                         "setAsDefault" to setAsDefault,
                         "nationalId" to nationalId,
-                        "phone" to phone
-                    )
+                        "phone" to phone,
+                        "customerEmail" to customerEmail
+                    ).filterValues { it != null }
                 )
         ).andExpect(status().is2xxSuccessful)
     }

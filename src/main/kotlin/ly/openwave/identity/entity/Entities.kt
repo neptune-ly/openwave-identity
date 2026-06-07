@@ -24,6 +24,18 @@ class BankEntity(
     @Column(name = "contact_email", nullable = false, length = 255)
     var contactEmail: String,
 
+    @Column(name = "logo_url", length = 512)
+    var logoUrl: String? = null,
+
+    @Column(name = "brand_color", length = 32)
+    var brandColor: String? = null,
+
+    @Column(name = "support_email", length = 255)
+    var supportEmail: String? = null,
+
+    @Column(name = "website", length = 512)
+    var website: String? = null,
+
     @Column(name = "api_key_hash", nullable = false, length = 64)
     val apiKeyHash: String,
 
@@ -43,7 +55,32 @@ class BankEntity(
     var updatedAt: Instant = Instant.now()
 )
 
-enum class PortalRole { REGISTRY_ADMIN, REGISTRY_OPERATOR, BANK_ADMIN, BANK_OPERATOR, BANK_VIEWER }
+@Entity
+@Table(name = "portal_audit_events")
+class PortalAuditEventEntity(
+    @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
+    val id: Long = 0,
+
+    @Column(name = "actor", nullable = false, length = 160)
+    val actor: String,
+
+    @Column(name = "action", nullable = false, length = 80)
+    val action: String,
+
+    @Column(name = "entity_type", nullable = false, length = 40)
+    val entityType: String,
+
+    @Column(name = "entity_id", nullable = false, length = 120)
+    val entityId: String,
+
+    @Column(name = "details", columnDefinition = "JSONB")
+    val details: String? = null,
+
+    @Column(name = "created_at", nullable = false, updatable = false)
+    val createdAt: Instant = Instant.now()
+)
+
+enum class PortalRole { REGISTRY_ADMIN, REGISTRY_OPERATOR, BANK_ADMIN, BANK_OPERATOR, BANK_VIEWER, CUSTOMER }
 
 @Entity
 @Table(name = "portal_users")
@@ -83,6 +120,124 @@ class PortalUserEntity(
     var lastLoginAt: Instant? = null
 )
 
+@Entity
+@Table(name = "portal_email_otps")
+class PortalEmailOtpEntity(
+    @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
+    val id: Long = 0,
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "user_id", nullable = false)
+    val user: PortalUserEntity,
+
+    @Column(name = "purpose", nullable = false, length = 40)
+    val purpose: String,
+
+    @Column(name = "code_hash", nullable = false, length = 255)
+    var codeHash: String,
+
+    @Column(name = "attempts", nullable = false)
+    var attempts: Int = 0,
+
+    @Column(name = "expires_at", nullable = false)
+    val expiresAt: Instant,
+
+    @Column(name = "used_at")
+    var usedAt: Instant? = null,
+
+    @Column(name = "created_at", nullable = false, updatable = false)
+    val createdAt: Instant = Instant.now(),
+
+    @Column(name = "ip_address", length = 45)
+    val ipAddress: String? = null
+) {
+    fun isValid(now: Instant = Instant.now()): Boolean = usedAt == null && now.isBefore(expiresAt)
+}
+
+@Entity
+@Table(name = "portal_user_passkeys")
+class PortalUserPasskeyEntity(
+    @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
+    val id: Long = 0,
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "user_id", nullable = false)
+    val user: PortalUserEntity,
+
+    @Column(name = "credential_id", nullable = false, unique = true, length = 512)
+    val credentialId: String,
+
+    @Column(name = "public_key", nullable = false, columnDefinition = "TEXT")
+    val publicKey: String,
+
+    @Column(name = "signature_count", nullable = false)
+    var signatureCount: Long = 0,
+
+    @Column(name = "aaguid", length = 64)
+    val aaguid: String? = null,
+
+    @Column(name = "attestation_type", length = 50)
+    val attestationType: String? = null,
+
+    @Column(name = "friendly_name", length = 120)
+    var friendlyName: String? = null,
+
+    @Column(name = "rp_id", length = 255)
+    var rpId: String? = null,
+
+    @Column(name = "origin", length = 255)
+    var origin: String? = null,
+
+    @Column(name = "created_at", nullable = false, updatable = false)
+    val createdAt: Instant = Instant.now(),
+
+    @Column(name = "last_used_at")
+    var lastUsedAt: Instant? = null
+)
+
+@Entity
+@Table(name = "portal_webauthn_challenges")
+class PortalWebAuthnChallengeEntity(
+    @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
+    val id: Long = 0,
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "user_id")
+    val user: PortalUserEntity? = null,
+
+    @Column(name = "purpose", nullable = false, length = 30)
+    val purpose: String,
+
+    @Column(name = "challenge", nullable = false, unique = true, length = 512)
+    val challenge: String,
+
+    @Column(name = "request_json", nullable = false, columnDefinition = "TEXT")
+    val requestJson: String,
+
+    @Column(name = "rp_id", length = 255)
+    val rpId: String? = null,
+
+    @Column(name = "origin", length = 255)
+    val origin: String? = null,
+
+    @Column(name = "expires_at", nullable = false)
+    val expiresAt: Instant,
+
+    @Column(name = "is_used", nullable = false)
+    var isUsed: Boolean = false,
+
+    @Column(name = "created_at", nullable = false, updatable = false)
+    val createdAt: Instant = Instant.now(),
+
+    @Column(name = "used_at")
+    var usedAt: Instant? = null,
+
+    @Column(name = "ip_address", length = 45)
+    val ipAddress: String? = null
+) {
+    fun isValid(now: Instant = Instant.now()): Boolean = !isUsed && now.isBefore(expiresAt)
+}
+
 enum class IdentityStatus { ACTIVE, SUSPENDED, DELETED }
 
 @Entity
@@ -109,6 +264,9 @@ class IdentityEntity(
 
     @Column(name = "phone", length = 20)
     var phone: String? = null,
+
+    @Column(name = "email", length = 255)
+    var email: String? = null,
 
     @Column(name = "created_at", nullable = false, updatable = false)
     val createdAt: Instant = Instant.now(),

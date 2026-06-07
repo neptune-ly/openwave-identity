@@ -7,6 +7,9 @@ import ly.openwave.identity.exception.*
 import ly.openwave.identity.repository.BankRepository
 import ly.openwave.identity.repository.IdentityRepository
 import ly.openwave.identity.repository.LinkedAccountRepository
+import org.springframework.data.domain.Page
+import org.springframework.data.domain.PageRequest
+import org.springframework.data.domain.Sort
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.time.Instant
@@ -17,7 +20,9 @@ private val HANDLE_REGEX = Regex("^[a-z0-9_.\\-]{3,32}$")
 class IdentityService(
     private val identityRepo: IdentityRepository,
     private val linkedAccountRepo: LinkedAccountRepository,
-    private val bankRepo: BankRepository
+    private val bankRepo: BankRepository,
+    private val portalUserService: PortalUserService,
+    private val portalSecurityService: PortalSecurityService
 ) {
 
     @Transactional
@@ -29,9 +34,11 @@ class IdentityService(
         bankCustomerRef: String,
         setAsDefault: Boolean,
         nationalId: String? = null,
-        phone: String? = null
+        phone: String? = null,
+        email: String? = null
     ): IdentityEntity {
         if (!HANDLE_REGEX.matches(nptHandle)) throw HandleInvalidFormatException(nptHandle)
+        val normalizedPhone = normalizePhone(phone) ?: phone?.trim()?.takeIf { it.isNotBlank() }
 
         // CRITICAL: National ID is REQUIRED for cross-bank identity verification
         if (nationalId == null || !nationalId.matches(Regex("^[0-9]{12}$"))) {
@@ -57,15 +64,19 @@ class IdentityService(
             if (linkedAccountRepo.existsByIdentityIdAndIban(existing.id, iban)) return existing
 
             // CRITICAL: Verify phone number matches if both provided
-            if (existing.phone != null && phone != null && existing.phone != phone) {
+            if (existing.phone != null && normalizedPhone != null && normalizePhone(existing.phone) != normalizedPhone) {
                 throw ForbiddenException(
-                    "Phone number mismatch: handle '$nptHandle' has phone ${existing.phone} but bank provided $phone. " +
+                    "Phone number mismatch: handle '$nptHandle' has phone ${existing.phone} but bank provided $normalizedPhone. " +
                     "Both National ID AND phone must match for cross-bank enrollment."
                 )
             }
             // Update phone if not set (national_id already verified above)
-            if (existing.phone == null && phone != null) {
-                existing.phone = phone
+            if (existing.phone == null && normalizedPhone != null) {
+                existing.phone = normalizedPhone
+                existing.updatedAt = Instant.now()
+            }
+            if (!email.isNullOrBlank() && existing.email.isNullOrBlank()) {
+                existing.email = email.trim()
                 existing.updatedAt = Instant.now()
             }
 
@@ -89,6 +100,7 @@ class IdentityService(
             }
             existing.updatedAt = Instant.now()
             identityRepo.save(existing)
+            ensureCustomerPortalAccess(existing, email)
             return existing
         }
 
@@ -108,7 +120,8 @@ class IdentityService(
             displayName       = displayName,
             defaultBankHandle = if (setAsDefault) bankHandle else null,
             nationalId        = nationalId,  // REQUIRED
-            phone             = phone
+            phone             = normalizedPhone,
+            email             = email?.trim()?.ifBlank { null }
         )
         identityRepo.save(identity)
 
@@ -121,7 +134,18 @@ class IdentityService(
                 isDefault       = true   // first IBAN for this bank is always default
             )
         )
+        ensureCustomerPortalAccess(identity, email)
         return identity
+    }
+
+    private fun ensureCustomerPortalAccess(identity: IdentityEntity, email: String?) {
+        val effectiveEmail = email?.trim()?.takeIf { it.isNotBlank() } ?: identity.email?.trim()?.takeIf { it.isNotBlank() } ?: return
+        val result = portalUserService.ensureCustomerUser(
+            username = identity.nptHandle,
+            displayName = identity.displayName,
+            email = effectiveEmail
+        )
+        portalSecurityService.issuePasswordSetupLink(result.user, login = result.user.username)
     }
 
     @Transactional
@@ -269,6 +293,21 @@ class IdentityService(
     fun getIdentityOrNull(nptHandle: String): IdentityEntity? =
         identityRepo.findByNptHandle(nptHandle)
 
+    fun getIdentityByPhone(phone: String): IdentityEntity {
+        val normalized = normalizePhone(phone) ?: throw IdentityNotFoundException("phone")
+        val candidates = linkedSetOf(normalized)
+        candidates.add("+$normalized")
+        if (normalized.startsWith("218")) candidates.add("0${normalized.removePrefix("218")}")
+        if (normalized.startsWith("0")) {
+            candidates.add("218${normalized.drop(1)}")
+            candidates.add("+218${normalized.drop(1)}")
+        }
+        return candidates.asSequence()
+            .mapNotNull { identityRepo.findByPhone(it) }
+            .firstOrNull()
+            ?: throw IdentityNotFoundException("phone")
+    }
+
     fun getLinkedAccounts(nptHandle: String, callerBankHandle: String): List<LinkedAccountEntity> {
         val identity = identityRepo.findByNptHandle(nptHandle) ?: throw IdentityNotFoundException(nptHandle)
         if (!linkedAccountRepo.existsByIdentityIdAndBankHandle(identity.id, callerBankHandle))
@@ -291,6 +330,31 @@ class IdentityService(
             .sortedBy { it.nptHandle }
     }
 
+    fun searchAliasesForBank(
+        callerBankHandle: String,
+        activeOnly: Boolean,
+        search: String?,
+        page: Int,
+        limit: Int,
+        maxLimit: Int = 100
+    ): Page<IdentityEntity> {
+        val pageable = PageRequest.of(
+            page.coerceAtLeast(0),
+            limit.coerceIn(1, maxLimit.coerceIn(1, 1_000)),
+            Sort.by(Sort.Direction.ASC, "nptHandle")
+        )
+        return identityRepo.searchAliasesForBank(
+            bankHandle = callerBankHandle,
+            activeOnly = activeOnly,
+            activeStatus = IdentityStatus.ACTIVE,
+            needle = search?.trim()?.lowercase()?.takeIf(String::isNotBlank),
+            pageable = pageable
+        )
+    }
+
     fun countActiveIdentities(): Long =
         identityRepo.countByStatusNot(IdentityStatus.DELETED)
+
+    private fun normalizePhone(phone: String?): String? =
+        phone?.filter(Char::isDigit)?.takeIf { it.length in 9..15 }
 }

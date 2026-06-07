@@ -55,12 +55,26 @@ class BankService(private val bankRepo: BankRepository) {
         else bankRepo.findAll()
 
     @Transactional
-    fun updateBank(bankHandle: String, coreUrl: String?, displayName: String?, contactEmail: String?, active: Boolean?): BankEntity {
+    fun updateBank(
+        bankHandle: String,
+        coreUrl: String?,
+        displayName: String?,
+        contactEmail: String?,
+        active: Boolean?,
+        logoUrl: String? = null,
+        brandColor: String? = null,
+        supportEmail: String? = null,
+        website: String? = null
+    ): BankEntity {
         val bank = getBank(bankHandle)
         coreUrl?.let { bank.coreUrl = it }
         displayName?.let { bank.displayName = it }
         contactEmail?.let { bank.contactEmail = it }
         active?.let { bank.active = it }
+        logoUrl?.let { bank.logoUrl = it.takeIf { value -> value.isNotBlank() } }
+        brandColor?.let { bank.brandColor = normalizeColor(it) }
+        supportEmail?.let { bank.supportEmail = it.takeIf { value -> value.isNotBlank() } }
+        website?.let { bank.website = it.takeIf { value -> value.isNotBlank() } }
         bank.updatedAt = Instant.now()
         return bankRepo.save(bank)
     }
@@ -89,4 +103,9 @@ class BankService(private val bankRepo: BankRepository) {
         val bytes = MessageDigest.getInstance("SHA-256").digest(input.toByteArray())
         return bytes.joinToString("") { "%02x".format(it) }
     }
+
+    private fun normalizeColor(value: String?): String? =
+        value?.trim()?.takeIf { it.matches(Regex("^#?[0-9A-Fa-f]{6}$")) }?.let {
+            if (it.startsWith("#")) it.uppercase() else "#${it.uppercase()}"
+        }
 }

@@ -13,6 +13,7 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.extension.ExtendWith
 import org.mockito.ArgumentMatchers.any
+import org.mockito.ArgumentMatchers.anyString
 import org.mockito.Mock
 import org.mockito.Mockito.`when`
 import org.mockito.junit.jupiter.MockitoExtension
@@ -28,13 +29,16 @@ class PortalUserServiceTest {
     @Mock
     private lateinit var bankRepo: BankRepository
 
+    @Mock
+    private lateinit var notificationService: PortalCredentialNotificationService
+
     private lateinit var service: PortalUserService
 
     private val encoder = BCryptPasswordEncoder()
 
     @BeforeEach
     fun setUp() {
-        service = PortalUserService(portalUserRepo, bankRepo)
+        service = PortalUserService(portalUserRepo, bankRepo, notificationService)
         `when`(portalUserRepo.save(any(PortalUserEntity::class.java))).thenAnswer { it.arguments[0] }
     }
 
@@ -57,17 +61,34 @@ class PortalUserServiceTest {
     }
 
     @Test
-    fun `reset password reports provider gap when user has email`() {
+    fun `reset password reports delivery failure when user has email and provider does not send`() {
         val user = portalUser(email = "operator@example.com", passwordHash = encoder.encode("old-password"))
         `when`(portalUserRepo.findById(user.id)).thenReturn(Optional.of(user))
+        `when`(notificationService.sendCredentialEmail(anyString(), anyString(), anyString(), anyString())).thenReturn(false)
 
         val result = service.resetPassword(user.id, callerAdmin = true, callerBankHandle = null)
 
         assertTrue(encoder.matches(result.temporaryPassword, result.user.passwordHash))
-        assertEquals(CredentialResetNotificationStatus.PROVIDER_NOT_CONFIGURED, result.notification.status)
+        assertEquals(CredentialResetNotificationStatus.DELIVERY_FAILED, result.notification.status)
         assertEquals(CredentialResetNotificationChannel.EMAIL, result.notification.channel)
         assertEquals(CredentialResetFallback.ONE_TIME_DISPLAY, result.notification.fallback)
-        assertTrue(result.notification.message.contains("no credential notification provider", ignoreCase = true))
+        assertTrue(result.notification.message.contains("delivery", ignoreCase = true))
+        assertFalse(result.notification.message.contains(result.temporaryPassword))
+    }
+
+    @Test
+    fun `reset password reports sent when email delivery succeeds`() {
+        val user = portalUser(email = "operator@example.com", passwordHash = encoder.encode("old-password"))
+        `when`(portalUserRepo.findById(user.id)).thenReturn(Optional.of(user))
+        `when`(notificationService.sendCredentialEmail(anyString(), anyString(), anyString(), anyString())).thenReturn(true)
+
+        val result = service.resetPassword(user.id, callerAdmin = true, callerBankHandle = null)
+
+        assertTrue(encoder.matches(result.temporaryPassword, result.user.passwordHash))
+        assertEquals(CredentialResetNotificationStatus.SENT, result.notification.status)
+        assertEquals(CredentialResetNotificationChannel.EMAIL, result.notification.channel)
+        assertEquals(CredentialResetFallback.ONE_TIME_DISPLAY, result.notification.fallback)
+        assertTrue(result.notification.message.contains("sent", ignoreCase = true))
         assertFalse(result.notification.message.contains(result.temporaryPassword))
     }
 

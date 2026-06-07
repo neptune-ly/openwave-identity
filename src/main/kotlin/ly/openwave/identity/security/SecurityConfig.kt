@@ -14,6 +14,7 @@ import org.springframework.security.core.userdetails.UserDetailsService
 import org.springframework.security.provisioning.InMemoryUserDetailsManager
 import org.springframework.security.web.SecurityFilterChain
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter
+import org.springframework.http.HttpMethod
 import org.springframework.web.filter.OncePerRequestFilter
 import jakarta.servlet.FilterChain
 import jakarta.servlet.http.HttpServletRequest
@@ -24,6 +25,7 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource
 
 const val ROLE_ADMIN       = "ROLE_ADMIN"
 const val ROLE_BANK        = "ROLE_BANK"
+const val ROLE_CUSTOMER    = "ROLE_CUSTOMER"
 
 @Configuration
 @EnableWebSecurity
@@ -56,16 +58,27 @@ class SecurityConfig(
                 // Public endpoints — no auth
                 it.requestMatchers(
                     "/identity/resolve",
-                    "/banks",
-                    "/banks/*",
                     "/auth/login",
+                    "/auth/password-reset/request",
+                    "/auth/password-reset/confirm",
+                    "/auth/passkey/options/authenticate",
+                    "/auth/passkey/authenticate",
                     "/registry/info",
+                    "/assets/**",
                     "/actuator/health"
                 ).permitAll()
+                it.requestMatchers(HttpMethod.GET, "/banks/me").hasRole("BANK")
+                it.requestMatchers(HttpMethod.GET, "/banks", "/banks/*").permitAll()
+                it.requestMatchers(HttpMethod.PATCH, "/banks/me/branding").hasRole("BANK")
+                it.requestMatchers(HttpMethod.POST, "/banks/me/branding/logo").hasRole("BANK")
                 // Admin only
-                it.requestMatchers("POST:/banks").hasRole("ADMIN")
-                it.requestMatchers("PATCH:/banks/*").hasRole("ADMIN")
+                it.requestMatchers(HttpMethod.POST, "/banks").hasRole("ADMIN")
+                it.requestMatchers(HttpMethod.PATCH, "/banks/**").hasRole("ADMIN")
+                it.requestMatchers(HttpMethod.POST, "/banks/*/branding/logo").hasRole("ADMIN")
+                it.requestMatchers("/identity/internal/**").hasRole("ADMIN")
+                it.requestMatchers("/portal/audit-events/**").hasRole("ADMIN")
                 it.requestMatchers("/portal-users/**").hasAnyRole("ADMIN", "BANK")
+                it.requestMatchers("/customer/**").hasRole("CUSTOMER")
                 // Bank-authenticated
                 it.anyRequest().hasAnyRole("BANK", "ADMIN")
             }
@@ -105,6 +118,12 @@ class ApiKeyFilter(
                     auth.details = bank
                     SecurityContextHolder.getContext().authentication = auth
                 }
+            }
+            portalSession?.role == "CUSTOMER" -> {
+                val auth = UsernamePasswordAuthenticationToken(
+                    portalSession.subject, null, listOf(SimpleGrantedAuthority(ROLE_CUSTOMER))
+                )
+                SecurityContextHolder.getContext().authentication = auth
             }
             adminKey != null && adminKey == props.adminKey -> {
                 val auth = UsernamePasswordAuthenticationToken(
