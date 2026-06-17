@@ -31,6 +31,13 @@ class BankNotFoundException(handle: String) :
 class BankHandleTakenException(handle: String) :
     RegistryException("BANK_HANDLE_TAKEN", "Bank handle '$handle' is already registered", HttpStatus.CONFLICT)
 
+class CustomerEmailRequiredException :
+    RegistryException(
+        "CUSTOMER_EMAIL_REQUIRED",
+        "Customer email is required for digital identity enrollment.",
+        HttpStatus.BAD_REQUEST
+    )
+
 class ForbiddenException(msg: String = "Forbidden") :
     RegistryException("FORBIDDEN", msg, HttpStatus.FORBIDDEN)
 

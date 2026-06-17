@@ -59,12 +59,13 @@
   <section class="identity-hero">
     <div>
       <img class="neptune-public-logo" src={neptuneLogo} alt="Neptune. Financial Technology And Solutions" />
-      <p class="identity-kicker">National Payment Tag registry</p>
-      <h1>One username. Multiple banks. Public routing, bank-scoped control.</h1>
+      <p class="identity-kicker">Bank-vouched digital identity for Libya</p>
+      <h1>One username. Multiple banks. Public routing, bank-scoped trust.</h1>
       <p class="identity-lede">
         OpenWave Identity is the source of truth for NPT handles such as <code>tellesy</code> and
         bank-qualified aliases such as <code>tellesy@andalus</code>. It lets any compliant gateway
-        resolve where money should go without giving merchants direct access to bank systems.
+        resolve where money should go, while preserving a bank-vouched customer payment identity
+        layer that works across different Libyan bank stacks.
       </p>
       <div class="identity-hero-actions">
         <a class="primary" href="/login">Open admin portal</a>
@@ -116,7 +117,7 @@
     <div>
       <p class="identity-kicker">Endpoint map</p>
       <h2>Read the API by operation</h2>
-      <p>Identity is intentionally small. It resolves handles, records bank-vouched account links, and publishes the bank phonebook. It does not execute payments.</p>
+      <p>Identity is intentionally narrow in scope. It resolves handles, records bank-vouched account links, and publishes the bank phonebook. It supports digital identity continuity, but it does not execute payments or replace bank-side KYC and authentication.</p>
     </div>
     <div class="endpoint-list">
       {#each endpoints as endpoint}
@@ -150,7 +151,7 @@
       </div>
       <div class="identity-flow-item">
         <span>3</span>
-        <p><b>Authorize</b> OTP, push, consent, mandate approval, execution, and webhooks remain in the gateway and bank stack.</p>
+        <p><b>Authorize</b> OTP, push, consent, mandate approval, execution, and webhooks remain in the gateway and bank stack, whether the bank uses Neptune products or its own internal implementation.</p>
       </div>
     </div>
   </section>

@@ -30,7 +30,7 @@ class IdentityController(
     fun claim(@Valid @RequestBody req: ClaimHandleRequest): ResponseEntity<IdentityResponse> {
         val callerBank = callerBankHandle()
         val wasNew = identityService.getIdentityOrNull(req.nptHandle) == null
-        val identity = identityService.claimHandle(
+        val result = identityService.claimHandle(
             nptHandle       = req.nptHandle,
             bankHandle      = callerBank,
             iban            = req.iban,
@@ -41,7 +41,8 @@ class IdentityController(
             phone           = req.phone,
             email           = req.customerEmail
         )
-        return ResponseEntity.status(if (wasNew) HttpStatus.CREATED else HttpStatus.OK).body(identity.toResponse())
+        return ResponseEntity.status(if (wasNew) HttpStatus.CREATED else HttpStatus.OK)
+            .body(result.identity.toResponse(result.customerPortalAccess))
     }
 
     @GetMapping("/{nptHandle}")
@@ -238,6 +239,7 @@ data class ClaimHandleRequest(
     @JsonAlias("customer_phone")
     val phone: String? = null,
 
+    @field:NotBlank(message = "Customer email is required")
     @field:Email
     @JsonAlias("customer_email")
     val customerEmail: String? = null
@@ -278,6 +280,7 @@ data class BankAliasResponse(
 
 data class BankAliasAccountResponse(
     val accountId: Long,
+    val iban: String,
     val ibanMasked: String,
     val accountName: String?,
     val currency: String,
@@ -291,8 +294,17 @@ data class IdentityResponse(
     val defaultBankHandle: String?,
     val linkedBanks: List<String>,
     val nationalIdPresent: Boolean,
+    val customerPortalAccess: CustomerPortalAccessResponse?,
     val createdAt: Instant,
     val updatedAt: Instant
+)
+
+data class CustomerPortalAccessResponse(
+    val username: String,
+    val userCreated: Boolean,
+    val emailConfigured: Boolean,
+    val passwordSetupLinkIssued: Boolean,
+    val nextStep: String
 )
 
 data class PublicProfileResponse(
@@ -346,13 +358,22 @@ data class PhoneLookupAccountResponse(
 
 // ─── Mappers ─────────────────────────────────────────────────────────────────
 
-fun IdentityEntity.toResponse() = IdentityResponse(
+fun IdentityEntity.toResponse(customerPortalAccess: ly.openwave.identity.service.CustomerPortalAccessResult? = null) = IdentityResponse(
     nptHandle         = nptHandle,
     displayName       = displayName,
     status            = status.name,
     defaultBankHandle = defaultBankHandle,
     linkedBanks       = linkedAccounts.map { it.bankHandle }.distinct(),
     nationalIdPresent = nationalId != null,
+    customerPortalAccess = customerPortalAccess?.let {
+        CustomerPortalAccessResponse(
+            username = it.username,
+            userCreated = it.userCreated,
+            emailConfigured = it.emailConfigured,
+            passwordSetupLinkIssued = it.passwordSetupLinkIssued,
+            nextStep = it.nextStep
+        )
+    },
     createdAt         = createdAt,
     updatedAt         = updatedAt
 )
@@ -372,6 +393,7 @@ private fun IdentityEntity.toBankAliasResponse(bankHandle: String): BankAliasRes
         accounts = bankAccounts.map { account ->
             BankAliasAccountResponse(
                 accountId = account.id,
+                iban = account.iban,
                 ibanMasked = maskIban(account.iban),
                 accountName = account.displayName,
                 currency = account.currency,

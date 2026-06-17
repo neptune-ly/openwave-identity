@@ -1,284 +1,154 @@
 <script>
   import { onMount } from 'svelte';
+  import { goto } from '$app/navigation';
+  import { page as appPage } from '$app/state';
   import { auth } from '$lib/stores/auth';
-  import { apiCall, apiPublic } from '$lib/api/client';
   import { get } from 'svelte/store';
-  import { toast } from 'svelte-sonner';
+  import UserPlus from 'lucide-svelte/icons/user-plus';
+  import Link2 from 'lucide-svelte/icons/link-2';
+  import Unlink2 from 'lucide-svelte/icons/unlink-2';
+  import Route from 'lucide-svelte/icons/route';
+  import Building2 from 'lucide-svelte/icons/building-2';
+  import ArrowRight from 'lucide-svelte/icons/arrow-right';
+  import ClipboardList from 'lucide-svelte/icons/clipboard-list';
+  import RefreshCw from 'lucide-svelte/icons/refresh-cw';
+  import Info from 'lucide-svelte/icons/info';
 
   let session = $state(null);
-  let banks   = $state([]);
+  let loading = $state(false);
 
-  let enroll      = $state({
-    nptHandle: '',
-    iban: '',
-    customerDisplayName: '',
-    bankCustomerRef: '',
-    nationalId: '',
-    phone: '',
-    customerEmail: '',
-    setAsDefault: true
-  });
-  let enrollResult = $state(null);
-  let enrollLoading = $state(false);
-
-  let linkHandle  = $state('');
-  let linkIban    = $state('');
-  let linkCustomerRef = $state('');
-  let linkDefault = $state(false);
-  let linkLoading = $state(false);
-
-  let unlinkHandle  = $state('');
-  let unlinkIban    = $state('');
-  let unlinkLoading = $state(false);
-
-  let defHandle  = $state('');
-  let defIban    = $state('');
-  let defLoading = $state(false);
-
-  let defBankHandle   = $state('');
-  let defBankSelected = $state('');
-  let defBankLoading  = $state(false);
-
-  onMount(async () => {
-    session = get(auth);
-    const r = await apiPublic('/banks');
-    if (r.ok) banks = r.data.banks || r.data || [];
-  });
+  const actionCards = [
+    {
+      key: 'claim',
+      title: 'Claim handle',
+      description: 'Create a customer identity and establish the first bank-backed account route.',
+      icon: UserPlus,
+      tone: 'text-indigo-300'
+    },
+    {
+      key: 'link',
+      title: 'Link account',
+      description: 'Attach another IBAN for the same customer identity within the current bank scope.',
+      icon: Link2,
+      tone: 'text-emerald-300'
+    },
+    {
+      key: 'unlink',
+      title: 'Unlink account',
+      description: 'Remove an outdated or invalid route from the selected customer alias.',
+      icon: Unlink2,
+      tone: 'text-rose-300'
+    },
+    {
+      key: 'default-account',
+      title: 'Default IBAN',
+      description: 'Choose which IBAN resolves when the payer selects a bank-specific alias.',
+      icon: Route,
+      tone: 'text-amber-300'
+    },
+    {
+      key: 'default-bank',
+      title: 'Default bank',
+      description: 'Set which bank answers a bare NPT handle without an explicit bank suffix.',
+      icon: Building2,
+      tone: 'text-sky-300'
+    }
+  ];
 
   const isBank = $derived(session?.role === 'BANK');
 
-  async function doEnroll() {
-    enrollLoading = true; enrollResult = null;
-    const r = await apiCall('post', '/identity/claim', enroll);
-    enrollLoading = false;
-    if (r.ok) {
-      enrollResult = r.data;
-      enroll = {
-        nptHandle: '',
-        iban: '',
-        customerDisplayName: '',
-        bankCustomerRef: '',
-        nationalId: '',
-        phone: '',
-        customerEmail: '',
-        setAsDefault: true
-      };
-      toast.success('Handle claimed');
-    } else toast.error(r.error);
-  }
+  onMount(async () => {
+    session = get(auth);
+    const flow = appPage.url.searchParams.get('flow');
+    if (flow && actionCards.some((item) => item.key === flow)) {
+      const params = new URLSearchParams(appPage.url.searchParams);
+      params.delete('flow');
+      const query = params.toString();
+      await goto(`/portal/identity/${flow}${query ? `?${query}` : ''}`, { replaceState: true });
+    }
+  });
 
-  async function doLink() {
-    linkLoading = true;
-    const r = await apiCall('post', `/identity/${linkHandle}/accounts`, {
-      iban: linkIban,
-      bankCustomerRef: linkCustomerRef,
-      setAsDefault: linkDefault
-    });
-    linkLoading = false;
-    if (r.ok) { linkHandle = ''; linkIban = ''; linkCustomerRef = ''; toast.success('IBAN linked'); }
-    else toast.error(r.error);
-  }
-
-  async function doUnlink() {
-    unlinkLoading = true;
-    const query = isBank && session?.bankHandle ? `?bankHandle=${encodeURIComponent(session.bankHandle)}` : '';
-    const r = await apiCall('delete', `/identity/${unlinkHandle}/accounts/iban/${encodeURIComponent(unlinkIban)}${query}`);
-    unlinkLoading = false;
-    if (r.ok) { unlinkHandle = ''; unlinkIban = ''; toast.success('IBAN unlinked'); }
-    else toast.error(r.error);
-  }
-
-  async function doSetDefaultIban() {
-    defLoading = true;
-    const query = isBank && session?.bankHandle ? `?bankHandle=${encodeURIComponent(session.bankHandle)}` : '';
-    const r = await apiCall('patch', `/identity/${defHandle}/accounts/iban/${encodeURIComponent(defIban)}/set-default${query}`);
-    defLoading = false;
-    if (r.ok) toast.success('Default IBAN updated');
-    else toast.error(r.error);
-  }
-
-  async function doSetDefaultBank() {
-    defBankLoading = true;
-    const r = await apiCall('patch', `/identity/${defBankHandle}/default-bank`, { bankHandle: defBankSelected });
-    defBankLoading = false;
-    if (r.ok) toast.success('Default bank updated');
-    else toast.error(r.error);
+  function hintClass() {
+    return 'inline-flex h-4 w-4 cursor-help text-white/40';
   }
 </script>
 
-<svelte:head><title>Identity — OpenWave</title></svelte:head>
+<svelte:head><title>Identity Operations - OpenWave Identity</title></svelte:head>
 
-<div class="p-8 max-w-4xl mx-auto space-y-5">
-
-  <div class="mb-8">
-    <h1 class="text-2xl font-semibold tracking-tight">Identity</h1>
-    <p class="text-white/40 text-sm mt-1">
-      {#if isBank}Claim handles and manage your bank's linked accounts{:else}Manage all identity handles and linked accounts{/if}
-    </p>
-  </div>
-
-  <!-- ── Claim Handle ─────────────────────────────────────────────────────── -->
-  <section class="rounded-2xl bg-white/[0.03] border border-white/[0.07] p-6">
-    <div class="flex items-start justify-between mb-5">
-      <div>
-        <div class="text-sm font-semibold">Claim NPT Handle</div>
-        <div class="text-[12px] text-white/30 mt-0.5">Bank vouches for the customer's identity</div>
+<div class="p-8 max-w-7xl mx-auto space-y-6">
+  <section class="identity-expressive-band p-6">
+    <div class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+      <div class="max-w-3xl">
+        <p class="text-[11px] uppercase tracking-[0.18em] text-white/30">{isBank ? 'Bank identity desk' : 'Registry identity desk'}</p>
+        <h1 class="identity-page-title mt-2 text-3xl font-semibold tracking-tight">Identity Operations</h1>
+        <p class="identity-section-note mt-2 text-sm text-white/55">
+          Keep this page focused on choosing the right workflow. Open a dedicated route desk for claim, linking, routing, or removal instead of stacking every operator action into one screen.
+        </p>
+        <div class="mt-3 flex flex-wrap gap-2 text-xs text-white/45">
+          <span class="identity-role-accent">
+            Dedicated flow desks
+            <span class="tooltip max-w-xs" data-tip="Each identity workflow now has its own route so operators can deep-link into one task at a time instead of sharing one overloaded page.">
+              <Info class={hintClass()} />
+            </span>
+          </span>
+          <span class="identity-role-accent">Bank-vouched routing</span>
+          <span class="identity-role-accent">Preflight-first actions</span>
+        </div>
       </div>
-      <div class="px-2.5 py-1 rounded-lg border text-[11px]
-        {isBank ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-amber-500/10 border-amber-500/20 text-amber-400'}">
-        {isBank ? 'Bank Access Active' : 'Admin Mode'}
+      <div class="flex flex-wrap gap-2">
+        <a href="/portal/reports" class="identity-shell-button inline-flex items-center gap-2 rounded-xl border px-4 py-2 text-[13px] font-medium transition-all hover:text-white">
+          <ClipboardList class="w-4 h-4" />
+          Reports
+        </a>
+        <a href="/portal/identity/claim" class="identity-shell-button inline-flex items-center gap-2 rounded-xl border px-4 py-2 text-[13px] font-medium transition-all hover:text-white">
+          <RefreshCw class="w-4 h-4" />
+          Start claim
+        </a>
       </div>
     </div>
+    <div class="mt-4 grid gap-3 md:grid-cols-3">
+      <div class="identity-surface-soft px-4 py-3">
+        <div class="text-[11px] uppercase tracking-[0.16em] text-white/30">Operator scope</div>
+        <div class="mt-2 text-lg font-semibold text-white">{isBank ? session?.bankHandle || 'Bank scope' : 'Global registry'}</div>
+        <div class="mt-1 text-[12px] text-white/45">{isBank ? 'Write actions remain bank-scoped unless the flow explicitly says otherwise.' : 'Admin actions can correct routing across the full registry.'}</div>
+      </div>
+      <div class="identity-surface-soft px-4 py-3">
+        <div class="text-[11px] uppercase tracking-[0.16em] text-white/30">Workflow count</div>
+        <div class="mt-2 text-lg font-semibold text-white">{actionCards.length} focused desks</div>
+        <div class="mt-1 text-[12px] text-white/45">Each route owns one identity change instead of combining every action on one page.</div>
+      </div>
+      <div class="identity-surface-soft px-4 py-3">
+        <div class="text-[11px] uppercase tracking-[0.16em] text-white/30">Primary job</div>
+        <div class="mt-2 text-lg font-semibold text-white">Choose one flow, then operate</div>
+        <div class="mt-1 text-[12px] text-white/45">Discovery stays here; form work, preflight, and result context move to the dedicated flow page.</div>
+      </div>
+    </div>
+  </section>
 
-    <div class="grid grid-cols-2 gap-3">
-      {#each [
-        ['nptHandle',           'NPT Handle',     'e.g. mtellesy'],
-        ['customerDisplayName', 'Display Name',   'Full name'],
-        ['iban',                'IBAN',            'LY83002700…'],
-        ['bankCustomerRef',     'Customer Ref',   'Internal bank ID'],
-        ['nationalId',          'National ID',    '12 digits'],
-        ['phone',               'Phone',          '0911091195'],
-        ['customerEmail',       'Email',          'customer@example.com'],
-      ] as [field, label, ph]}
-        <div class={field === 'customerEmail' ? 'col-span-2' : ''}>
-          <label for={`enroll-${field}`} class="block text-[11px] text-white/35 mb-1.5 uppercase tracking-wider">{label}</label>
-          <input
-            id={`enroll-${field}`}
-            bind:value={enroll[field]}
-            placeholder={ph}
-            class="w-full bg-white/[0.05] border border-white/[0.1] rounded-xl px-3.5 py-2.5 text-[13px] text-white font-mono placeholder-white/20 focus:outline-none focus:border-indigo-500/60 transition-all"
-          />
-        </div>
+  <section class="identity-surface-card p-6">
+    <div class="flex flex-col gap-2 lg:flex-row lg:items-end lg:justify-between">
+      <div>
+        <p class="text-[11px] uppercase tracking-[0.18em] text-white/30">Identity workflows</p>
+        <h2 class="mt-2 text-lg font-semibold text-white">Open one focused desk at a time.</h2>
+        <p class="mt-2 max-w-3xl text-sm text-white/45">
+          Claims, route linking, unlinking, default-account changes, and default-bank changes have different risk. They should not compete for attention on one page.
+        </p>
+      </div>
+      <div class="identity-role-accent">No mixed workflow page</div>
+    </div>
+    <div class="mt-5 grid gap-3 lg:grid-cols-2 xl:grid-cols-3">
+      {#each actionCards as card}
+        <a href={`/portal/identity/${card.key}`} class="identity-workspace-card p-5 transition-all hover:bg-white/[0.045]">
+          <div class="flex items-start justify-between gap-3">
+            <div class={`flex h-11 w-11 items-center justify-center rounded-2xl border border-white/[0.08] bg-white/[0.04] ${card.tone}`}>
+              <card.icon class="h-5 w-5" />
+            </div>
+            <ArrowRight class="mt-1 h-4 w-4 text-white/30" />
+          </div>
+          <div class="mt-4 text-sm font-semibold text-white">{card.title}</div>
+          <div class="mt-2 text-[13px] leading-5 text-white/45">{card.description}</div>
+        </a>
       {/each}
-      <div class="col-span-2 flex items-center gap-2.5">
-        <input type="checkbox" bind:checked={enroll.setAsDefault} id="sd" class="w-4 h-4 accent-indigo-500"/>
-        <label for="sd" class="text-[13px] text-white/40">Set as default bank for this handle</label>
-      </div>
-    </div>
-
-    {#if enrollResult}
-      <div class="mt-4 rounded-xl bg-emerald-500/[0.06] border border-emerald-500/20 p-4">
-        <div class="text-[11px] text-emerald-400 font-medium uppercase tracking-wider mb-2">Handle claimed</div>
-        <div class="grid grid-cols-2 gap-2">
-          {#each Object.entries(enrollResult) as [k, v]}
-            {#if typeof v !== 'object'}
-              <div><div class="text-[10px] text-white/25">{k}</div><div class="text-[12px] text-white font-mono mt-0.5">{v}</div></div>
-            {/if}
-          {/each}
-        </div>
-      </div>
-    {/if}
-
-    <button
-      onclick={doEnroll}
-      disabled={enrollLoading || !enroll.nptHandle || !enroll.iban}
-      class="mt-4 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-30 text-white text-[13px] font-semibold rounded-xl transition-all"
-    >
-      {enrollLoading ? 'Claiming…' : 'Claim Handle'}
-    </button>
-  </section>
-
-  <!-- ── Link IBAN ─────────────────────────────────────────────────────────── -->
-  <section class="rounded-2xl bg-white/[0.03] border border-white/[0.07] p-6">
-    <div class="text-sm font-semibold mb-1">Link Additional IBAN</div>
-    <div class="text-[12px] text-white/30 mb-4">Add another account to an existing identity</div>
-    <div class="grid grid-cols-3 gap-3 items-end">
-      <div>
-        <label for="link-handle" class="block text-[11px] text-white/35 mb-1.5 uppercase tracking-wider">NPT Handle</label>
-        <input id="link-handle" bind:value={linkHandle} placeholder="mtellesy"
-          class="w-full bg-white/[0.05] border border-white/[0.1] rounded-xl px-3.5 py-2.5 text-[13px] text-white font-mono placeholder-white/20 focus:outline-none focus:border-indigo-500/60 transition-all"/>
-      </div>
-      <div>
-        <label for="link-iban" class="block text-[11px] text-white/35 mb-1.5 uppercase tracking-wider">IBAN</label>
-        <input id="link-iban" bind:value={linkIban} placeholder="LY92010500…"
-          class="w-full bg-white/[0.05] border border-white/[0.1] rounded-xl px-3.5 py-2.5 text-[13px] text-white font-mono placeholder-white/20 focus:outline-none focus:border-indigo-500/60 transition-all"/>
-      </div>
-      <div>
-        <label for="link-ref" class="block text-[11px] text-white/35 mb-1.5 uppercase tracking-wider">Customer Ref</label>
-        <input id="link-ref" bind:value={linkCustomerRef} placeholder="Internal bank ID"
-          class="w-full bg-white/[0.05] border border-white/[0.1] rounded-xl px-3.5 py-2.5 text-[13px] text-white font-mono placeholder-white/20 focus:outline-none focus:border-indigo-500/60 transition-all"/>
-      </div>
-      <div class="space-y-2">
-        <div class="flex items-center gap-2">
-          <input type="checkbox" bind:checked={linkDefault} id="ld" class="w-4 h-4 accent-indigo-500"/>
-          <label for="ld" class="text-[12px] text-white/35">Set as default</label>
-        </div>
-        <button onclick={doLink} disabled={linkLoading || !linkHandle || !linkIban || !linkCustomerRef}
-          class="w-full px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-30 text-white text-[13px] font-semibold rounded-xl transition-all">
-          {linkLoading ? '…' : 'Link IBAN'}
-        </button>
-      </div>
-    </div>
-  </section>
-
-  <!-- ── Unlink IBAN ───────────────────────────────────────────────────────── -->
-  <section class="rounded-2xl bg-white/[0.03] border border-white/[0.07] p-6">
-    <div class="text-sm font-semibold mb-1">Unlink IBAN</div>
-    <div class="text-[12px] text-white/30 mb-4">Remove an account from an identity</div>
-    <div class="grid grid-cols-3 gap-3 items-end">
-      <div>
-        <label for="unlink-handle" class="block text-[11px] text-white/35 mb-1.5 uppercase tracking-wider">NPT Handle</label>
-        <input id="unlink-handle" bind:value={unlinkHandle} placeholder="mtellesy"
-          class="w-full bg-white/[0.05] border border-white/[0.1] rounded-xl px-3.5 py-2.5 text-[13px] text-white font-mono placeholder-white/20 focus:outline-none focus:border-red-500/60 transition-all"/>
-      </div>
-      <div>
-        <label for="unlink-iban" class="block text-[11px] text-white/35 mb-1.5 uppercase tracking-wider">IBAN</label>
-        <input id="unlink-iban" bind:value={unlinkIban} placeholder="LY83002700…"
-          class="w-full bg-white/[0.05] border border-white/[0.1] rounded-xl px-3.5 py-2.5 text-[13px] text-white font-mono placeholder-white/20 focus:outline-none focus:border-red-500/60 transition-all"/>
-      </div>
-      <button onclick={doUnlink} disabled={unlinkLoading || !unlinkHandle || !unlinkIban}
-        class="px-4 py-2.5 bg-red-600/70 hover:bg-red-600 disabled:opacity-30 text-white text-[13px] font-semibold rounded-xl transition-all">
-        {unlinkLoading ? '…' : 'Unlink'}
-      </button>
-    </div>
-  </section>
-
-  <!-- ── Set Default IBAN ──────────────────────────────────────────────────── -->
-  <section class="rounded-2xl bg-white/[0.03] border border-white/[0.07] p-6">
-    <div class="text-sm font-semibold mb-1">Set Default IBAN</div>
-    <div class="text-[12px] text-white/30 mb-4">Which IBAN resolves for <code class="text-white/40">handle@bank</code></div>
-    <div class="grid grid-cols-3 gap-3 items-end">
-      <div>
-        <label for="default-iban-handle" class="block text-[11px] text-white/35 mb-1.5 uppercase tracking-wider">NPT Handle</label>
-        <input id="default-iban-handle" bind:value={defHandle} placeholder="mtellesy"
-          class="w-full bg-white/[0.05] border border-white/[0.1] rounded-xl px-3.5 py-2.5 text-[13px] text-white font-mono placeholder-white/20 focus:outline-none focus:border-indigo-500/60 transition-all"/>
-      </div>
-      <div>
-        <label for="default-iban" class="block text-[11px] text-white/35 mb-1.5 uppercase tracking-wider">IBAN</label>
-        <input id="default-iban" bind:value={defIban} placeholder="LY83002700…"
-          class="w-full bg-white/[0.05] border border-white/[0.1] rounded-xl px-3.5 py-2.5 text-[13px] text-white font-mono placeholder-white/20 focus:outline-none focus:border-indigo-500/60 transition-all"/>
-      </div>
-      <button onclick={doSetDefaultIban} disabled={defLoading || !defHandle || !defIban}
-        class="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-30 text-white text-[13px] font-semibold rounded-xl transition-all">
-        {defLoading ? '…' : 'Set Default'}
-      </button>
-    </div>
-  </section>
-
-  <!-- ── Set Default Bank ──────────────────────────────────────────────────── -->
-  <section class="rounded-2xl bg-white/[0.03] border border-white/[0.07] p-6">
-    <div class="text-sm font-semibold mb-1">Set Default Bank</div>
-    <div class="text-[12px] text-white/30 mb-4">Which bank resolves for bare <code class="text-white/40">handle</code></div>
-    <div class="grid grid-cols-3 gap-3 items-end">
-      <div>
-        <label for="default-bank-handle" class="block text-[11px] text-white/35 mb-1.5 uppercase tracking-wider">NPT Handle</label>
-        <input id="default-bank-handle" bind:value={defBankHandle} placeholder="mtellesy"
-          class="w-full bg-white/[0.05] border border-white/[0.1] rounded-xl px-3.5 py-2.5 text-[13px] text-white font-mono placeholder-white/20 focus:outline-none focus:border-indigo-500/60 transition-all"/>
-      </div>
-      <div>
-        <label for="default-bank" class="block text-[11px] text-white/35 mb-1.5 uppercase tracking-wider">Bank</label>
-        <select id="default-bank" bind:value={defBankSelected}
-          class="w-full bg-[#0d0d18] border border-white/[0.1] rounded-xl px-3.5 py-2.5 text-[13px] text-white focus:outline-none focus:border-indigo-500/60 transition-all">
-          <option value="">Select bank</option>
-          {#each banks as b}
-            <option value={b.bankHandle}>{b.displayName || b.bankHandle}</option>
-          {/each}
-        </select>
-      </div>
-      <button onclick={doSetDefaultBank} disabled={defBankLoading || !defBankHandle || !defBankSelected}
-        class="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-30 text-white text-[13px] font-semibold rounded-xl transition-all">
-        {defBankLoading ? '…' : 'Set Default'}
-      </button>
     </div>
   </section>
 </div>

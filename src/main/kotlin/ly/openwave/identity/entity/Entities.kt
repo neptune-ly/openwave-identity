@@ -1,6 +1,7 @@
 package ly.openwave.identity.entity
 
 import jakarta.persistence.*
+import java.security.MessageDigest
 import java.time.Instant
 
 @Entity
@@ -106,6 +107,15 @@ class PortalUserEntity(
 
     @Column(name = "email", length = 255)
     var email: String? = null,
+
+    @Column(name = "totp_secret", length = 128)
+    var totpSecret: String? = null,
+
+    @Column(name = "totp_pending_secret", length = 128)
+    var totpPendingSecret: String? = null,
+
+    @Column(name = "totp_enabled_at")
+    var totpEnabledAt: Instant? = null,
 
     @Column(name = "active", nullable = false)
     var active: Boolean = true,
@@ -236,6 +246,110 @@ class PortalWebAuthnChallengeEntity(
     val ipAddress: String? = null
 ) {
     fun isValid(now: Instant = Instant.now()): Boolean = !isUsed && now.isBefore(expiresAt)
+}
+
+@Entity
+@Table(name = "portal_login_challenges")
+class PortalLoginChallengeEntity(
+    @Id
+    @Column(name = "id", nullable = false, length = 64)
+    val id: String,
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "user_id", nullable = false)
+    val user: PortalUserEntity,
+
+    @Column(name = "purpose", nullable = false, length = 30)
+    val purpose: String = "TOTP_LOGIN",
+
+    @Column(name = "requires_bank_approval", nullable = false)
+    val requiresBankApproval: Boolean = false,
+
+    @Column(name = "identifier_type", length = 24)
+    val identifierType: String? = null,
+
+    @Column(name = "identifier_value", length = 120)
+    val identifierValue: String? = null,
+
+    @Column(name = "expires_at", nullable = false)
+    val expiresAt: Instant,
+
+    @Column(name = "used_at")
+    var usedAt: Instant? = null,
+
+    @Column(name = "created_at", nullable = false, updatable = false)
+    val createdAt: Instant = Instant.now(),
+
+    @Column(name = "ip_address", length = 45)
+    val ipAddress: String? = null
+) {
+    fun isValid(now: Instant = Instant.now()): Boolean = usedAt == null && now.isBefore(expiresAt)
+}
+
+enum class BankLoginChallengeStatus { PENDING, APPROVED, REJECTED }
+
+@Entity
+@Table(name = "portal_bank_login_challenges")
+class PortalBankLoginChallengeEntity(
+    @Id
+    @Column(name = "id", nullable = false, length = 64)
+    val id: String,
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "user_id", nullable = false)
+    val user: PortalUserEntity,
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "identity_id", nullable = false)
+    val identity: IdentityEntity,
+
+    @Column(name = "identifier_type", nullable = false, length = 24)
+    val identifierType: String,
+
+    @Column(name = "identifier_hint", nullable = false, length = 120)
+    val identifierHint: String,
+
+    @Column(name = "status_token_hash", length = 64)
+    val statusTokenHash: String? = null,
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "status", nullable = false, length = 20)
+    var status: BankLoginChallengeStatus = BankLoginChallengeStatus.PENDING,
+
+    @Column(name = "approved_bank_handle", length = 20)
+    var approvedBankHandle: String? = null,
+
+    @Column(name = "portal_session_token", length = 2048)
+    var portalSessionToken: String? = null,
+
+    @Column(name = "portal_session_expires_at")
+    var portalSessionExpiresAt: Instant? = null,
+
+    @Column(name = "expires_at", nullable = false)
+    val expiresAt: Instant,
+
+    @Column(name = "actioned_at")
+    var actionedAt: Instant? = null,
+
+    @Column(name = "created_at", nullable = false, updatable = false)
+    val createdAt: Instant = Instant.now(),
+
+    @Column(name = "ip_address", length = 45)
+    val ipAddress: String? = null
+) {
+    fun isPending(now: Instant = Instant.now()): Boolean =
+        status == BankLoginChallengeStatus.PENDING && now.isBefore(expiresAt)
+
+    fun effectiveStatus(now: Instant = Instant.now()): String =
+        if (status == BankLoginChallengeStatus.PENDING && now.isAfter(expiresAt)) "EXPIRED" else status.name
+
+    fun matchesStatusToken(token: String?): Boolean {
+        if (token.isNullOrBlank()) return false
+        val digest = MessageDigest.getInstance("SHA-256")
+        val actual = digest.digest(token.toByteArray()).joinToString("") { "%02x".format(it) }
+        val expected = statusTokenHash ?: return false
+        return MessageDigest.isEqual(actual.toByteArray(), expected.toByteArray())
+    }
 }
 
 enum class IdentityStatus { ACTIVE, SUSPENDED, DELETED }

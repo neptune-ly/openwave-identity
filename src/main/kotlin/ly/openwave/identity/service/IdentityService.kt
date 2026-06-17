@@ -16,13 +16,27 @@ import java.time.Instant
 
 private val HANDLE_REGEX = Regex("^[a-z0-9_.\\-]{3,32}$")
 
+data class CustomerPortalAccessResult(
+    val username: String,
+    val userCreated: Boolean,
+    val emailConfigured: Boolean,
+    val passwordSetupLinkIssued: Boolean,
+    val nextStep: String
+)
+
+data class ClaimHandleResult(
+    val identity: IdentityEntity,
+    val customerPortalAccess: CustomerPortalAccessResult?
+)
+
 @Service
 class IdentityService(
     private val identityRepo: IdentityRepository,
     private val linkedAccountRepo: LinkedAccountRepository,
     private val bankRepo: BankRepository,
     private val portalUserService: PortalUserService,
-    private val portalSecurityService: PortalSecurityService
+    private val portalSecurityService: PortalSecurityService,
+    private val credentialNotificationService: PortalCredentialNotificationService
 ) {
 
     @Transactional
@@ -36,9 +50,10 @@ class IdentityService(
         nationalId: String? = null,
         phone: String? = null,
         email: String? = null
-    ): IdentityEntity {
+    ): ClaimHandleResult {
         if (!HANDLE_REGEX.matches(nptHandle)) throw HandleInvalidFormatException(nptHandle)
         val normalizedPhone = normalizePhone(phone) ?: phone?.trim()?.takeIf { it.isNotBlank() }
+        val normalizedEmail = email?.trim()?.takeIf { it.isNotBlank() } ?: throw CustomerEmailRequiredException()
 
         // CRITICAL: National ID is REQUIRED for cross-bank identity verification
         if (nationalId == null || !nationalId.matches(Regex("^[0-9]{12}$"))) {
@@ -61,7 +76,9 @@ class IdentityService(
             val existing = existingByNationalId
             
             // Identity exists — check if this IBAN is already linked (idempotent)
-            if (linkedAccountRepo.existsByIdentityIdAndIban(existing.id, iban)) return existing
+            if (linkedAccountRepo.existsByIdentityIdAndIban(existing.id, iban)) {
+                return ClaimHandleResult(existing, ensureCustomerPortalAccess(existing, normalizedEmail))
+            }
 
             // CRITICAL: Verify phone number matches if both provided
             if (existing.phone != null && normalizedPhone != null && normalizePhone(existing.phone) != normalizedPhone) {
@@ -75,8 +92,8 @@ class IdentityService(
                 existing.phone = normalizedPhone
                 existing.updatedAt = Instant.now()
             }
-            if (!email.isNullOrBlank() && existing.email.isNullOrBlank()) {
-                existing.email = email.trim()
+            if (existing.email.isNullOrBlank()) {
+                existing.email = normalizedEmail
                 existing.updatedAt = Instant.now()
             }
 
@@ -95,13 +112,18 @@ class IdentityService(
                     isDefault       = isDefaultForBank
                 )
             )
+            notifyLinkedAccountChange(
+                identity = existing,
+                bankHandle = bankHandle,
+                iban = iban,
+                actionLabel = if (isFirstForBank) "New bank linked to your identity" else "New account linked to your identity"
+            )
             if (setAsDefault && existing.defaultBankHandle == null) {
                 existing.defaultBankHandle = bankHandle
             }
             existing.updatedAt = Instant.now()
             identityRepo.save(existing)
-            ensureCustomerPortalAccess(existing, email)
-            return existing
+            return ClaimHandleResult(existing, ensureCustomerPortalAccess(existing, normalizedEmail))
         }
 
         // STEP 2: Check if username is taken by someone else
@@ -121,7 +143,7 @@ class IdentityService(
             defaultBankHandle = if (setAsDefault) bankHandle else null,
             nationalId        = nationalId,  // REQUIRED
             phone             = normalizedPhone,
-            email             = email?.trim()?.ifBlank { null }
+            email             = normalizedEmail
         )
         identityRepo.save(identity)
 
@@ -134,18 +156,34 @@ class IdentityService(
                 isDefault       = true   // first IBAN for this bank is always default
             )
         )
-        ensureCustomerPortalAccess(identity, email)
-        return identity
+        notifyLinkedAccountChange(
+            identity = identity,
+            bankHandle = bankHandle,
+            iban = iban,
+            actionLabel = "Identity enrolled and first account linked"
+        )
+        return ClaimHandleResult(identity, ensureCustomerPortalAccess(identity, normalizedEmail))
     }
 
-    private fun ensureCustomerPortalAccess(identity: IdentityEntity, email: String?) {
-        val effectiveEmail = email?.trim()?.takeIf { it.isNotBlank() } ?: identity.email?.trim()?.takeIf { it.isNotBlank() } ?: return
+    private fun ensureCustomerPortalAccess(identity: IdentityEntity, email: String?): CustomerPortalAccessResult? {
+        val effectiveEmail = email?.trim()?.takeIf { it.isNotBlank() } ?: identity.email?.trim()?.takeIf { it.isNotBlank() } ?: return null
         val result = portalUserService.ensureCustomerUser(
             username = identity.nptHandle,
             displayName = identity.displayName,
             email = effectiveEmail
         )
-        portalSecurityService.issuePasswordSetupLink(result.user, login = result.user.username)
+        val setupLinkIssued = portalSecurityService.issuePasswordSetupLink(result.user, login = result.user.username)
+        return CustomerPortalAccessResult(
+            username = result.user.username,
+            userCreated = result.created,
+            emailConfigured = !result.user.email.isNullOrBlank(),
+            passwordSetupLinkIssued = setupLinkIssued,
+            nextStep = when {
+                setupLinkIssued -> "Customer should use the secure set-password email from OpenWave Identity."
+                !result.user.email.isNullOrBlank() -> "Customer portal user exists, but the set-password email was not sent. Use the portal reset flow or operator reset action."
+                else -> "Customer portal user exists without email. Add customer email before sending access."
+            }
+        )
     }
 
     @Transactional
@@ -176,6 +214,12 @@ class IdentityService(
                 bankCustomerRef = bankCustomerRef,
                 isDefault       = makeDefault
             )
+        )
+        notifyLinkedAccountChange(
+            identity = identity,
+            bankHandle = bankHandle,
+            iban = iban,
+            actionLabel = if (isFirstForBank) "New bank linked to your identity" else "New account linked to your identity"
         )
 
         if (setAsDefault || identity.defaultBankHandle == null) {
@@ -357,4 +401,18 @@ class IdentityService(
 
     private fun normalizePhone(phone: String?): String? =
         phone?.filter(Char::isDigit)?.takeIf { it.length in 9..15 }
+
+    private fun notifyLinkedAccountChange(identity: IdentityEntity, bankHandle: String, iban: String, actionLabel: String) {
+        val to = identity.email?.trim()?.takeIf { it.isNotBlank() } ?: return
+        val bank = bankRepo.findByBankHandle(bankHandle)
+        credentialNotificationService.sendLinkedAccountNotice(
+            to = to,
+            displayName = identity.displayName,
+            username = identity.nptHandle,
+            bankDisplayName = bank?.displayName ?: bankHandle,
+            bankHandle = bankHandle,
+            iban = iban,
+            actionLabel = actionLabel
+        )
+    }
 }

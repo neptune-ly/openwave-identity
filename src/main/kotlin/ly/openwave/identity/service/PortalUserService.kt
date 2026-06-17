@@ -3,6 +3,7 @@ package ly.openwave.identity.service
 import ly.openwave.identity.entity.PortalRole
 import ly.openwave.identity.entity.PortalUserEntity
 import ly.openwave.identity.repository.BankRepository
+import ly.openwave.identity.repository.IdentityRepository
 import ly.openwave.identity.repository.PortalUserRepository
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder
 import org.springframework.stereotype.Service
@@ -10,7 +11,10 @@ import org.springframework.transaction.annotation.Transactional
 import java.security.SecureRandom
 import java.time.Instant
 
-data class PortalLoginResult(val user: PortalUserEntity)
+data class PortalLoginResult(
+    val user: PortalUserEntity,
+    val matchedIdentifierType: String = "USERNAME"
+)
 data class PortalUserCreateResult(val user: PortalUserEntity, val temporaryPassword: String)
 data class PortalUserCreateNotificationResult(
     val user: PortalUserEntity,
@@ -50,18 +54,79 @@ enum class CredentialResetFallback {
 class PortalUserService(
     private val portalUserRepo: PortalUserRepository,
     private val bankRepo: BankRepository,
+    private val identityRepo: IdentityRepository,
     private val credentialNotificationService: PortalCredentialNotificationService
 ) {
     private val encoder = BCryptPasswordEncoder()
     private val random = SecureRandom()
 
-    fun resolveLogin(username: String, password: String): PortalLoginResult? {
-        val user = portalUserRepo.findByUsername(username) ?: return null
+    fun resolveLogin(username: String, password: String, requestedRole: String? = null): PortalLoginResult? {
+        val resolved = resolvePortalUser(username, requestedRole) ?: return null
+        val user = resolved.user
         if (!user.active || !encoder.matches(password, user.passwordHash)) return null
+        return PortalLoginResult(user = user, matchedIdentifierType = resolved.identifierType)
+    }
+
+    private data class ResolvedPortalUser(val user: PortalUserEntity, val identifierType: String)
+
+    private fun resolvePortalUser(identifier: String, requestedRole: String?): ResolvedPortalUser? {
+        val normalized = identifier.trim()
+        if (normalized.isBlank()) return null
+
+        portalUserRepo.findByUsername(normalized)?.let { return ResolvedPortalUser(it, "USERNAME") }
+        portalUserRepo.findByEmail(normalized)?.let { return ResolvedPortalUser(it, "EMAIL") }
+
+        val customerOnly = requestedRole?.uppercase() == "CUSTOMER"
+        if (!customerOnly) return null
+
+        resolveCustomerIdentityUsername(normalized)?.let { resolved ->
+            portalUserRepo.findByUsername(resolved.username)?.let {
+                return ResolvedPortalUser(it, resolved.identifierType)
+            }
+        }
+
+        return null
+    }
+
+    private data class ResolvedCustomerIdentity(val username: String, val identifierType: String)
+
+    private fun resolveCustomerIdentityUsername(identifier: String): ResolvedCustomerIdentity? {
+        val digits = identifier.filter(Char::isDigit)
+        if (digits.length == 12) {
+            identityRepo.findByNationalId(digits)?.let { return ResolvedCustomerIdentity(it.nptHandle, "NATIONAL_ID") }
+        }
+
+        normalizePhone(identifier)?.let { normalizedPhone ->
+            identityRepo.findByPhone(normalizedPhone)?.let { return ResolvedCustomerIdentity(it.nptHandle, "PHONE") }
+        }
+
+        return null
+    }
+
+    private fun normalizePhone(value: String): String? {
+        val digits = value.filter(Char::isDigit)
+        if (digits.isBlank()) return null
+        return when {
+            digits.length == 10 && digits.startsWith("0") -> "218${digits.drop(1)}"
+            digits.length == 12 && digits.startsWith("218") -> digits
+            digits.length in 9..15 -> digits
+            else -> null
+        }
+    }
+
+    @Transactional
+    fun updateSelfProfile(user: PortalUserEntity, displayName: String?, email: String?): PortalUserEntity {
+        displayName?.let { user.displayName = it.trim().ifBlank { user.username } }
+        email?.let { user.email = it.trim().ifBlank { null } }
+        user.updatedAt = Instant.now()
+        return portalUserRepo.save(user)
+    }
+
+    @Transactional
+    fun recordSuccessfulLogin(user: PortalUserEntity): PortalUserEntity {
         user.lastLoginAt = Instant.now()
         user.updatedAt = Instant.now()
-        portalUserRepo.save(user)
-        return PortalLoginResult(user)
+        return portalUserRepo.save(user)
     }
 
     fun listUsers(callerAdmin: Boolean, callerBankHandle: String?): List<PortalUserEntity> =

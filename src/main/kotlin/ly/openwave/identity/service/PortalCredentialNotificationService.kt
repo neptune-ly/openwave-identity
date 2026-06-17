@@ -11,6 +11,15 @@ import org.springframework.stereotype.Service
 interface PortalCredentialNotificationService {
     fun sendCredentialEmail(to: String?, displayName: String, username: String, temporaryPassword: String): Boolean
     fun sendPasswordResetLink(to: String?, displayName: String, resetLink: String): Boolean
+    fun sendLinkedAccountNotice(
+        to: String?,
+        displayName: String,
+        username: String,
+        bankDisplayName: String,
+        bankHandle: String,
+        iban: String,
+        actionLabel: String
+    ): Boolean
 }
 
 @Service
@@ -64,6 +73,34 @@ class SmtpPortalCredentialNotificationService(
             true
         } catch (ex: Exception) {
             log.warn("Failed to send OpenWave Identity password reset OTP to {}: {}", to, ex.message)
+            false
+        }
+    }
+
+    override fun sendLinkedAccountNotice(
+        to: String?,
+        displayName: String,
+        username: String,
+        bankDisplayName: String,
+        bankHandle: String,
+        iban: String,
+        actionLabel: String
+    ): Boolean {
+        if (to.isNullOrBlank()) return false
+        return try {
+            val message = mailSender.createMimeMessage()
+            val helper = MimeMessageHelper(message, true, Charsets.UTF_8.name())
+            helper.setFrom(InternetAddress(fromAddress, fromName))
+            helper.setTo(to)
+            helper.setSubject("OpenWave Identity account update")
+            helper.setText(
+                linkedAccountPlainBody(displayName, username, bankDisplayName, bankHandle, iban, actionLabel),
+                linkedAccountHtmlBody(displayName, username, bankDisplayName, bankHandle, iban, actionLabel)
+            )
+            mailSender.send(message)
+            true
+        } catch (ex: Exception) {
+            log.warn("Failed to send OpenWave Identity account update email to {}: {}", to, ex.message)
             false
         }
     }
@@ -159,6 +196,81 @@ class SmtpPortalCredentialNotificationService(
         </html>
     """.trimIndent()
 
+    private fun linkedAccountPlainBody(
+        displayName: String,
+        username: String,
+        bankDisplayName: String,
+        bankHandle: String,
+        iban: String,
+        actionLabel: String
+    ) = """
+        Dear $displayName,
+
+        Your OpenWave Identity profile was updated.
+
+        Change: $actionLabel
+        Username: $username
+        Bank: $bankDisplayName ($bankHandle)
+        Account: ${maskIban(iban)}
+
+        If you did not expect this change, contact your bank immediately and review your OpenWave Identity portal access.
+
+        Portal URL: $portalUrl
+
+        OpenWave Identity
+    """.trimIndent()
+
+    private fun linkedAccountHtmlBody(
+        displayName: String,
+        username: String,
+        bankDisplayName: String,
+        bankHandle: String,
+        iban: String,
+        actionLabel: String
+    ) = """
+        <!doctype html>
+        <html lang="en">
+        <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Identity account update</title></head>
+        <body style="margin:0;padding:0;background:#f4f6f8;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;color:#12213a;">
+          <div style="max-width:640px;margin:0 auto;padding:28px 14px;">
+            <div style="background:#ffffff;border:1px solid #e2e8f0;border-radius:20px;overflow:hidden;box-shadow:0 16px 42px rgba(15,23,42,.08);">
+              <div style="padding:28px 30px 20px;border-bottom:1px solid #e8edf3;">
+                <table style="width:100%;border-collapse:collapse;">
+                  <tr>
+                    <td style="font-size:28px;line-height:1;font-weight:800;letter-spacing:.01em;color:#173865;">Neptune<span style="color:#ef5350;">.</span></td>
+                    <td style="text-align:right;font-size:12px;line-height:1.4;color:#64748b;text-transform:uppercase;letter-spacing:.08em;font-weight:700;">OpenWave<br>Identity</td>
+                  </tr>
+                </table>
+                <h1 style="margin:26px 0 8px;font-size:24px;line-height:1.25;color:#0f172a;">Identity account update</h1>
+                <p style="margin:0;font-size:15px;line-height:1.65;color:#526174;">Dear ${escape(displayName)}, your bank-vouched Identity profile was updated.</p>
+              </div>
+              <div style="padding:26px 30px 30px;">
+                <div style="border:1px solid #e4eaf1;border-radius:16px;padding:16px 18px;margin:0 0 16px;background:#fbfcfe;">
+                  <p style="margin:0 0 10px;font-size:12px;color:#173865;font-weight:800;letter-spacing:.07em;text-transform:uppercase;">Change summary</p>
+                  <table style="width:100%;border-collapse:collapse;">
+                    <tr><td style="padding:10px 0;color:#64748b;width:170px;border-top:0;">Change</td><td style="padding:10px 0;text-align:right;font-weight:700;border-top:0;">${escape(actionLabel)}</td></tr>
+                    <tr><td style="padding:10px 0;color:#64748b;border-top:1px solid #edf2f7;">Username</td><td style="padding:10px 0;text-align:right;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-weight:700;border-top:1px solid #edf2f7;">${escape(username)}</td></tr>
+                    <tr><td style="padding:10px 0;color:#64748b;border-top:1px solid #edf2f7;">Bank</td><td style="padding:10px 0;text-align:right;font-weight:700;border-top:1px solid #edf2f7;">${escape(bankDisplayName)} (${escape(bankHandle)})</td></tr>
+                    <tr><td style="padding:10px 0;color:#64748b;border-top:1px solid #edf2f7;">Account</td><td style="padding:10px 0;text-align:right;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-weight:700;border-top:1px solid #edf2f7;">${escape(maskIban(iban))}</td></tr>
+                  </table>
+                </div>
+                <div style="margin:16px 0 0;padding:14px 16px;border-radius:14px;background:#fff8eb;border:1px solid #f4d79b;color:#7a4b00;font-size:13px;line-height:1.55;">
+                  If you did not expect this change, contact your bank immediately and review your OpenWave Identity portal access.
+                </div>
+                <a href="${escape(portalUrl)}" style="display:inline-block;margin-top:18px;background:#173865;color:#ffffff;text-decoration:none;font-weight:700;padding:13px 22px;border-radius:12px;">Open Identity portal</a>
+              </div>
+              <div style="padding:18px 30px 24px;border-top:1px solid #e8edf3;color:#7b8794;font-size:12px;line-height:1.55;">
+                This message was sent by OpenWave Identity. It records a bank-vouched account-linking change and is separate from Neptune Astro gateway notifications.
+              </div>
+            </div>
+          </div>
+        </body>
+        </html>
+    """.trimIndent()
+
+    private fun maskIban(iban: String): String =
+        if (iban.length <= 10) iban else "${iban.take(6)}...${iban.takeLast(4)}"
+
     private fun escape(value: String): String =
         value.replace("&", "&amp;")
             .replace("<", "&lt;")
@@ -171,4 +283,13 @@ class SmtpPortalCredentialNotificationService(
 class NoopPortalCredentialNotificationService : PortalCredentialNotificationService {
     override fun sendCredentialEmail(to: String?, displayName: String, username: String, temporaryPassword: String): Boolean = false
     override fun sendPasswordResetLink(to: String?, displayName: String, resetLink: String): Boolean = false
+    override fun sendLinkedAccountNotice(
+        to: String?,
+        displayName: String,
+        username: String,
+        bankDisplayName: String,
+        bankHandle: String,
+        iban: String,
+        actionLabel: String
+    ): Boolean = false
 }

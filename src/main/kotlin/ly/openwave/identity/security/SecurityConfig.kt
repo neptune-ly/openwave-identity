@@ -59,6 +59,8 @@ class SecurityConfig(
                 it.requestMatchers(
                     "/identity/resolve",
                     "/auth/login",
+                    "/auth/login/totp/verify",
+                    "/auth/login/bank-approval/*",
                     "/auth/password-reset/request",
                     "/auth/password-reset/confirm",
                     "/auth/passkey/options/authenticate",
@@ -79,8 +81,19 @@ class SecurityConfig(
                 it.requestMatchers("/portal/audit-events/**").hasRole("ADMIN")
                 it.requestMatchers("/portal-users/**").hasAnyRole("ADMIN", "BANK")
                 it.requestMatchers("/customer/**").hasRole("CUSTOMER")
+                it.requestMatchers(
+                    "/auth/profile",
+                    "/auth/passkeys",
+                    "/auth/passkeys/*",
+                    "/auth/passkey/options/register",
+                    "/auth/passkey/register",
+                    "/auth/totp",
+                    "/auth/totp/setup",
+                    "/auth/totp/confirm",
+                    "/auth/totp/disable"
+                ).hasAnyRole("ADMIN", "BANK", "CUSTOMER")
                 // Bank-authenticated
-                it.anyRequest().hasAnyRole("BANK", "ADMIN")
+                it.anyRequest().hasAnyRole("BANK", "ADMIN", "CUSTOMER")
             }
             .addFilterBefore(ApiKeyFilter(props, bankService, portalTokenService), UsernamePasswordAuthenticationFilter::class.java)
 

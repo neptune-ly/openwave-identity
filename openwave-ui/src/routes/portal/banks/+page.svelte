@@ -1,318 +1,317 @@
 <script>
   import { onMount } from 'svelte';
+  import { goto } from '$app/navigation';
+  import { page } from '$app/stores';
   import { auth } from '$lib/stores/auth';
-  import { apiCall, apiPublic, getApi } from '$lib/api/client';
+  import { apiCall, apiPublic } from '$lib/api/client';
   import { get } from 'svelte/store';
   import { toast } from 'svelte-sonner';
+  import Building2 from 'lucide-svelte/icons/building-2';
+  import RefreshCw from 'lucide-svelte/icons/refresh-cw';
+  import Plus from 'lucide-svelte/icons/plus';
+  import Info from 'lucide-svelte/icons/info';
+  import Palette from 'lucide-svelte/icons/palette';
+  import ShieldCheck from 'lucide-svelte/icons/shield-check';
+  import CircleCheckBig from 'lucide-svelte/icons/circle-check-big';
+  import Search from 'lucide-svelte/icons/search';
 
-  let session  = $state(null);
-  let banks    = $state([]);
-  let loading  = $state(false);
-  let showForm = $state(false);
+  let session = $state(null);
+  let banks = $state([]);
+  let loading = $state(false);
   let newBankKey = $state('');
-  let selectedBank = $state(null);
-  let editForm = $state({ displayName: '', brandColor: '', supportEmail: '', website: '', logoUrl: '' });
-  let editLoading = $state(false);
+  let search = $state('');
+  let readinessFilter = $state('all');
 
-  let form = $state({ bankHandle: '', displayName: '', country: 'LY', coreUrl: '', contactEmail: '', brandColor: '', supportEmail: '', website: '' });
+  let form = $state({
+    bankHandle: '',
+    displayName: '',
+    country: 'LY',
+    coreUrl: '',
+    contactEmail: '',
+    brandColor: '',
+    supportEmail: '',
+    website: ''
+  });
   let formLoading = $state(false);
 
   const isAdmin = $derived(session?.role === 'ADMIN');
+  const activeBanks = $derived(banks.filter((bank) => bank.active).length);
+  const brandedBanks = $derived(banks.filter((bank) => bank.branding?.brand_color || bank.branding?.logo_url || bank.branding?.website).length);
+  const readyBanks = $derived(banks.filter((bank) => readinessRows(bank).every((item) => item.done)).length);
+  const filteredBanks = $derived(filterBanks(banks, search, readinessFilter));
+  const myBank = $derived(!isAdmin ? banks[0] ?? null : null);
+  const myBankPackage = $derived(myBank?.operationsPackage ?? null);
 
   onMount(async () => {
     session = get(auth);
+    hydrateRouteState();
     await loadBanks();
   });
 
+  function hydrateRouteState() {
+    const current = get(page).url.searchParams;
+    search = current.get('search') ?? '';
+    readinessFilter = ['all', 'ready', 'needs-work'].includes(current.get('readiness')) ? current.get('readiness') : 'all';
+  }
+
   async function loadBanks() {
     loading = true;
-    const r = isAdmin ? await apiPublic('/banks') : await apiCall('get', '/banks/me');
-    if (r.ok) banks = isAdmin ? (r.data.banks || r.data || []) : [r.data];
-    else toast.error(r.error || 'Could not load bank profile');
-    loading = false;
-  }
-
-  async function registerBank() {
-    formLoading = true; newBankKey = '';
-    const r = await apiCall('post', '/banks', form);
-    formLoading = false;
-    if (r.ok) {
-      newBankKey = r.data.bankApiKey || r.data.apiKey || '';
-      form = { bankHandle: '', displayName: '', country: 'LY', coreUrl: '', contactEmail: '', brandColor: '', supportEmail: '', website: '' };
-      showForm = false;
-      await loadBanks();
-      toast.success('Bank registered');
-    } else {
-      toast.error(r.error);
-    }
-  }
-
-  function copyKey() {
-    navigator.clipboard.writeText(newBankKey);
-    toast.success('Copied to clipboard');
-  }
-
-  function openBranding(bank) {
-    selectedBank = bank;
-    editForm = {
-      displayName: bank.branding?.display_name || bank.displayName || '',
-      brandColor: bank.branding?.brand_color || '',
-      supportEmail: bank.branding?.support_email || '',
-      website: bank.branding?.website || '',
-      logoUrl: bank.branding?.logo_url || '',
-    };
-  }
-
-  async function saveBranding() {
-    if (!selectedBank) return;
-    editLoading = true;
-    const endpoint = isAdmin ? `/banks/${selectedBank.bankHandle}/branding` : '/banks/me/branding';
-    const r = await apiCall('patch', endpoint, editForm);
-    editLoading = false;
-    if (r.ok) {
-      toast.success('Bank branding updated');
-      selectedBank = null;
-      await loadBanks();
-    } else {
-      toast.error(r.error);
-    }
-  }
-
-  async function uploadLogo(event) {
-    if (!selectedBank) return;
-    const file = event.currentTarget.files?.[0];
-    event.currentTarget.value = '';
-    if (!file) return;
-    const formData = new FormData();
-    formData.append('file', file);
-    editLoading = true;
     try {
-      const endpoint = isAdmin ? `/banks/${selectedBank.bankHandle}/branding/logo` : '/banks/me/branding/logo';
-      await getApi().post(endpoint, formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      });
-      toast.success('Bank logo uploaded');
-      selectedBank = null;
-      await loadBanks();
-    } catch (error) {
-      toast.error(error?.response?.data?.message || error?.response?.data?.error || error?.message || 'Could not upload logo');
+      const response = isAdmin ? await apiPublic('/banks') : await apiCall('get', '/banks/me');
+      if (!response.ok) {
+        toast.error(response.error || 'Could not load bank profile');
+        banks = [];
+        return;
+      }
+      banks = isAdmin ? (response.data.banks || response.data || []) : [response.data];
     } finally {
-      editLoading = false;
+      loading = false;
     }
+  }
+
+  async function syncRouteState() {
+    const next = new URL(get(page).url);
+    next.searchParams.delete('section');
+    if (search.trim()) next.searchParams.set('search', search.trim());
+    else next.searchParams.delete('search');
+    if (readinessFilter !== 'all') next.searchParams.set('readiness', readinessFilter);
+    else next.searchParams.delete('readiness');
+    await goto(`${next.pathname}${next.search}`, { replaceState: true, noScroll: true, keepFocus: true });
+  }
+
+  function readinessRows(bank) {
+    if (!bank) return [];
+    return [
+      {
+        title: 'Directory identity',
+        done: Boolean(bank.branding?.display_name || bank.displayName),
+        detail: bank.branding?.display_name || bank.displayName || 'Missing display name'
+      },
+      {
+        title: 'Operations contact',
+        done: Boolean(bank.contactEmail || bank.branding?.support_email),
+        detail: bank.branding?.support_email || bank.contactEmail || 'Missing support email'
+      },
+      {
+        title: 'Core routing profile',
+        done: Boolean(bank.coreUrl),
+        detail: bank.coreUrl || 'Missing core URL'
+      },
+      {
+        title: 'Brand signal',
+        done: Boolean(bank.branding?.brand_color || bank.branding?.logo_url),
+        detail: bank.branding?.logo_url ? 'Logo uploaded' : bank.branding?.brand_color ? `Color ${bank.branding.brand_color}` : 'No color or logo'
+      },
+      {
+        title: 'Public website',
+        done: Boolean(bank.branding?.website),
+        detail: bank.branding?.website || 'Missing website'
+      }
+    ];
+  }
+
+  function hintClass() {
+    return 'inline-flex h-4 w-4 cursor-help text-white/40';
+  }
+
+  function bankReady(bank) {
+    return readinessRows(bank).every((item) => item.done);
+  }
+
+  function filterBanks(allBanks, query, readiness) {
+    const normalized = query.trim().toLowerCase();
+    return allBanks.filter((bank) => {
+      if (readiness === 'ready' && !bankReady(bank)) return false;
+      if (readiness === 'needs-work' && bankReady(bank)) return false;
+      if (!normalized) return true;
+      return [
+        bank.bankHandle,
+        bank.handle,
+        bank.displayName,
+        bank.name,
+        bank.branding?.display_name,
+        bank.branding?.support_email,
+        bank.contactEmail,
+        bank.country
+      ].some((value) => String(value || '').toLowerCase().includes(normalized));
+    });
   }
 </script>
 
-<svelte:head><title>Banks — OpenWave</title></svelte:head>
+<svelte:head><title>{isAdmin ? 'Banks' : 'My Bank'} - OpenWave Identity</title></svelte:head>
 
-<div class="p-8 max-w-4xl mx-auto">
-
-  <div class="mb-8 flex items-end justify-between">
-    <div>
-      <h1 class="text-2xl font-semibold tracking-tight">{isAdmin ? 'Banks' : 'My Bank'}</h1>
-      <p class="text-white/40 text-sm mt-1">{isAdmin ? `${banks.length} registered member bank${banks.length !== 1 ? 's' : ''}` : 'Bank profile, branding, and public directory visibility'}</p>
-    </div>
-    <div class="flex gap-2">
-      <button
-        onclick={loadBanks}
-        class="px-4 py-2 text-[13px] font-medium text-white/40 hover:text-white border border-white/[0.1] rounded-xl transition-all hover:border-white/20"
-      >
-        Refresh
-      </button>
-      {#if isAdmin}
-        <button
-          onclick={() => showForm = !showForm}
-          class="px-4 py-2 text-[13px] font-semibold bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl transition-all"
-        >
-          Register Bank
+<div class="mx-auto max-w-7xl space-y-6 p-8">
+  <section class="identity-expressive-band p-6">
+    <div class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+      <div>
+        <p class="text-[11px] uppercase tracking-[0.18em] text-white/30">{isAdmin ? 'Registry banking directory' : 'Bank identity workspace'}</p>
+        <h1 class="identity-page-title mt-2 text-3xl font-semibold tracking-tight">{isAdmin ? 'Banks' : 'My Bank'}</h1>
+        <p class="identity-section-note mt-1 text-sm text-white/50">
+          {isAdmin
+            ? 'Keep this page focused on bank discovery and onboarding. Open any bank on its own desk to manage profile and readiness.'
+            : 'Use this page as the entry surface for your bank record. Profile changes stay on the dedicated bank desk.'}
+        </p>
+        <div class="mt-3 flex flex-wrap gap-2 text-xs text-white/45">
+          <span class="identity-role-accent">Directory-grade profile control</span>
+          <span class="identity-role-accent">Dedicated bank desks</span>
+          <span class="identity-role-accent">{isAdmin ? 'Registry-owned onboarding' : 'Controlled bank self-service'}</span>
+        </div>
+        <div class="mt-4 flex flex-wrap gap-2">
+          <span class="identity-role-accent">
+            Directory profile
+            <span class="tooltip max-w-xs" data-tip="This workspace controls the bank record shown in OpenWave Identity directory and registry tools. It does not change Astro payment routing or settlement execution.">
+              <Info class={hintClass()} />
+            </span>
+          </span>
+          <span class="identity-role-accent">
+            Dedicated desks
+            <span class="tooltip max-w-xs" data-tip="Open a bank record to manage branding and readiness on its own page instead of overloading the registry screen.">
+              <Info class={hintClass()} />
+            </span>
+          </span>
+        </div>
+      </div>
+      <div class="flex flex-wrap gap-2">
+        <button onclick={loadBanks} disabled={loading} class="identity-shell-button inline-flex items-center gap-2 rounded-xl border px-4 py-2 text-[13px] font-medium transition-all hover:text-white disabled:opacity-40">
+          <RefreshCw class={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+          Refresh
         </button>
+        {#if isAdmin}
+          <button onclick={() => goto('/portal/banks/register')} class="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-[13px] font-semibold text-white transition-all hover:bg-indigo-500">
+            <Plus class="h-4 w-4" />
+            Register bank
+          </button>
+        {/if}
+      </div>
+    </div>
+    <div class="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+      {#if isAdmin}
+        <div class="identity-surface-soft px-4 py-3">
+          <div class="text-[11px] uppercase tracking-[0.16em] text-white/30">Directory posture</div>
+          <div class="mt-2 text-lg font-semibold text-white">{banks.length} bank record(s)</div>
+          <div class="mt-1 text-[12px] text-white/45">{activeBanks} active · {readyBanks} ready for profile-quality checks</div>
+        </div>
+        <div class="identity-surface-soft px-4 py-3">
+          <div class="text-[11px] uppercase tracking-[0.16em] text-white/30">Brand signal</div>
+          <div class="mt-2 text-lg font-semibold text-white">{brandedBanks} branded</div>
+          <div class="mt-1 text-[12px] text-white/45">Directory branding stays separate from payment routing and execution</div>
+        </div>
+        <div class="identity-surface-soft px-4 py-3">
+          <div class="text-[11px] uppercase tracking-[0.16em] text-white/30">Primary job</div>
+          <div class="mt-2 text-lg font-semibold text-white">Search, filter, then open desk</div>
+          <div class="mt-1 text-[12px] text-white/45">Registration stays here; edits and readiness review belong on the bank page</div>
+        </div>
+      {:else}
+        <div class="identity-surface-soft px-4 py-3">
+          <div class="text-[11px] uppercase tracking-[0.16em] text-white/30">Published profile</div>
+          <div class="mt-2 text-lg font-semibold text-white">{myBank?.active ? 'Active' : 'Inactive'}</div>
+          <div class="mt-1 text-[12px] text-white/45">{myBank?.bankHandle || 'Bank handle loading'} published directory record</div>
+        </div>
+        <div class="identity-surface-soft px-4 py-3">
+          <div class="text-[11px] uppercase tracking-[0.16em] text-white/30">Customer scope</div>
+          <div class="mt-2 text-lg font-semibold text-white">{myBankPackage?.customer_registry?.linked_customer_count ?? 0} linked customers</div>
+          <div class="mt-1 text-[12px] text-white/45">{myBankPackage?.customer_registry?.linked_account_count ?? 0} linked account route(s)</div>
+        </div>
+        <div class="identity-surface-soft px-4 py-3">
+          <div class="text-[11px] uppercase tracking-[0.16em] text-white/30">Needs attention</div>
+          <div class="mt-2 text-lg font-semibold text-white">{myBankPackage?.login_approvals?.pending ?? 0} pending approval(s)</div>
+          <div class="mt-1 text-[12px] text-white/45">{myBankPackage?.portal_access?.active_portal_user_count ?? 0} active portal user(s)</div>
+        </div>
       {/if}
     </div>
-  </div>
+  </section>
 
-  <!-- New bank key reveal -->
-  {#if newBankKey}
-    <div class="rounded-2xl bg-amber-950/30 border border-amber-500/30 p-5 mb-6">
-      <div class="flex items-center gap-2 mb-3">
-        <div class="w-1.5 h-1.5 rounded-full bg-amber-400"></div>
-        <span class="text-[13px] font-semibold text-amber-300">Save this Bank Access Credential — shown only once</span>
-      </div>
-      <code class="block font-mono text-sm text-amber-200 bg-black/30 rounded-xl px-4 py-3 break-all">{newBankKey}</code>
-      <button onclick={copyKey} class="mt-3 text-[12px] text-amber-400/60 hover:text-amber-400 transition-colors">
-        Copy to clipboard
-      </button>
-    </div>
-  {/if}
-
-  <!-- Register form -->
-  {#if showForm && isAdmin}
-    <div class="rounded-2xl bg-white/[0.03] border border-white/[0.07] p-6 mb-6">
-      <div class="text-sm font-semibold mb-5">Register New Bank</div>
-      <div class="grid grid-cols-2 gap-3">
-        {#each [
-          ['bankHandle',   'Handle',         'e.g. nub'],
-          ['displayName',  'Display Name',   'NUB Bank'],
-          ['country',      'Country Code',   'LY'],
-          ['coreUrl',      'Core URL',       'https://...'],
-          ['contactEmail', 'Contact Email',  'ops@bank.ly'],
-          ['brandColor',   'Brand Color',    '#07315F'],
-          ['supportEmail', 'Support Email',  'support@bank.ly'],
-          ['website',      'Website',        'https://bank.ly'],
-        ] as [field, label, ph]}
+  <div class="space-y-6">
+    <section class="identity-surface-card overflow-hidden">
+      <div class="border-b border-white/[0.06] px-5 py-4">
+        <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div>
-            <label for={`bank-${field}`} class="block text-[11px] text-white/35 mb-1.5 uppercase tracking-wider">{label}</label>
-            <input
-              id={`bank-${field}`}
-              bind:value={form[field]}
-              placeholder={ph}
-              class="w-full bg-white/[0.05] border border-white/[0.1] rounded-xl px-3.5 py-2.5 text-[13px] text-white font-mono placeholder-white/20 focus:outline-none focus:border-indigo-500/60 transition-all"
-            />
+          <p class="text-[11px] uppercase tracking-[0.18em] text-white/30">{isAdmin ? 'Directory registry' : 'Published bank record'}</p>
+          <h2 class="mt-1 text-lg font-semibold">{isAdmin ? 'Bank directory' : 'Current directory profile'}</h2>
+          <p class="mt-1 text-[12px] text-white/35">
+            {isAdmin ? 'Open a dedicated bank desk for profile and readiness management.' : 'Use the button below to open your dedicated bank desk.'}
+          </p>
           </div>
-        {/each}
-      </div>
-      <div class="flex gap-2 mt-4">
-        <button
-          onclick={registerBank}
-          disabled={formLoading || !form.bankHandle || !form.displayName}
-          class="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-30 text-white text-[13px] font-semibold rounded-xl transition-all"
-        >
-          {formLoading ? 'Registering…' : 'Register'}
-        </button>
-        <button
-          onclick={() => showForm = false}
-          class="px-5 py-2.5 border border-white/[0.1] hover:border-white/20 text-white/40 hover:text-white text-[13px] font-semibold rounded-xl transition-all"
-        >
-          Cancel
-        </button>
-      </div>
-    </div>
-  {/if}
-
-  <!-- Bank list -->
-  {#if loading}
-    <div class="space-y-2">
-      {#each Array(4) as _}
-        <div class="h-16 rounded-2xl bg-white/[0.02] animate-pulse"></div>
-      {/each}
-    </div>
-  {:else if banks.length === 0}
-    <div class="rounded-2xl bg-white/[0.02] border border-white/[0.05] py-16 text-center">
-      <div class="text-4xl mb-3 opacity-20">◻</div>
-      <div class="text-white/30 text-sm">No banks registered yet</div>
-    </div>
-  {:else}
-    {#if !isAdmin && banks[0]}
-      {@const bank = banks[0]}
-      <div class="grid grid-cols-3 gap-3 mb-5">
-        {#each [
-          ['Handle', bank.bankHandle],
-          ['Core URL', bank.coreUrl || 'not visible'],
-          ['Contact', bank.contactEmail || bank.branding?.support_email || 'not set'],
-          ['Support', bank.branding?.support_email || 'not set'],
-          ['Website', bank.branding?.website || 'not set'],
-          ['Status', bank.active ? 'active' : 'inactive'],
-        ] as [label, value]}
-          <div class="rounded-2xl border border-white/[0.07] bg-white/[0.03] px-4 py-3">
-            <div class="text-[10px] text-white/25 uppercase tracking-wider">{label}</div>
-            <div class="mt-1 truncate text-[13px] text-white/70">{value}</div>
+          <div class="identity-role-accent">
+            {isAdmin ? `${filteredBanks.length} matching record${filteredBanks.length === 1 ? '' : 's'}` : myBank ? `${myBank.bankHandle} current record` : 'Record loading'}
           </div>
-        {/each}
+        </div>
       </div>
-    {/if}
 
-    <div class="rounded-2xl bg-white/[0.03] border border-white/[0.07] overflow-hidden">
-      <div class="grid grid-cols-[44px_1fr_60px_80px_100px_74px] gap-x-4 px-5 py-3 border-b border-white/[0.05]
-        text-[11px] text-white/20 uppercase tracking-wider font-medium">
-        <span></span><span>Bank</span><span>Country</span><span>Status</span><span>Registered</span><span></span>
-      </div>
-      <div class="divide-y divide-white/[0.04]">
-        {#each banks as bank}
-          <div class="grid grid-cols-[44px_1fr_60px_80px_100px_74px] gap-x-4 items-center px-5 py-3.5 hover:bg-white/[0.02] transition-colors">
-            <div class="w-9 h-9 rounded-xl bg-indigo-600/15 border border-indigo-500/20 flex items-center justify-center overflow-hidden text-[11px] font-bold text-indigo-400">
-              {#if bank.branding?.logo_url}
-                <img src={bank.branding.logo_url} alt={bank.displayName} class="h-full w-full object-cover" />
+      {#if loading}
+        <div class="space-y-3 p-5">
+          {#each Array(4) as _}
+            <div class="identity-surface-soft h-20 animate-pulse"></div>
+          {/each}
+        </div>
+      {:else if !filteredBanks.length}
+        <div class="px-5 py-16 text-center text-sm text-white/40">No banks are registered yet.</div>
+      {:else if isAdmin}
+        <div class="grid gap-3 border-b border-white/[0.06] px-5 py-4 lg:grid-cols-[minmax(0,1fr)_180px]">
+          <label class="relative block">
+            <Search class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/25" />
+            <input bind:value={search} oninput={() => syncRouteState()} placeholder="Search bank, handle, contact" class="w-full rounded-xl border border-white/[0.1] bg-white/[0.04] py-2 pl-9 pr-3 text-[13px] text-white placeholder-white/20 focus:border-indigo-500/50 focus:outline-none" />
+          </label>
+          <select bind:value={readinessFilter} onchange={() => syncRouteState()} class="rounded-xl border border-white/[0.1] bg-white/[0.04] px-3 py-2 text-[13px] text-white focus:border-indigo-500/50 focus:outline-none">
+            <option value="all">All readiness</option>
+            <option value="ready">Ready</option>
+            <option value="needs-work">Needs work</option>
+          </select>
+        </div>
+        <div class="divide-y divide-white/[0.05]">
+          {#each filteredBanks as bank}
+            <button type="button" onclick={() => goto(`/portal/banks/${bank.bankHandle}`)} class="grid w-full gap-4 px-5 py-4 text-left transition-colors hover:bg-white/[0.03] md:grid-cols-[minmax(0,1fr)_120px_130px]">
+              <div class="flex min-w-0 items-center gap-3">
+                <div class="flex h-11 w-11 items-center justify-center overflow-hidden rounded-2xl border border-white/[0.08] bg-white/[0.05] text-xs font-semibold text-indigo-300">
+                  {#if bank.branding?.logo_url}
+                    <img src={bank.branding.logo_url} alt={bank.displayName} class="h-full w-full object-cover" />
+                  {:else}
+                    {bank.bankHandle?.slice(0, 2).toUpperCase()}
+                  {/if}
+                </div>
+                <div class="min-w-0">
+                  <div class="flex items-center gap-2">
+                    <p class="truncate text-sm font-semibold text-white">{bank.branding?.display_name || bank.displayName}</p>
+                    {#if bank.branding?.brand_color}
+                      <span class="h-2.5 w-2.5 rounded-full border border-white/25" style={`background:${bank.branding.brand_color}`}></span>
+                    {/if}
+                  </div>
+                  <p class="mt-1 truncate text-[12px] text-white/35">{bank.bankHandle} · {bank.branding?.support_email || bank.contactEmail || 'Support email missing'}</p>
+                </div>
+              </div>
+              <div class="text-sm text-white/55">
+                <p>{bank.country}</p>
+                <p class="mt-1 text-[12px] text-white/30">{bank.registeredAt ? new Date(bank.registeredAt).toLocaleDateString() : '—'}</p>
+              </div>
+              <div class="flex items-center justify-start md:justify-end">
+                <span class={`rounded-full border px-2.5 py-1 text-[11px] font-medium ${bankReady(bank) ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-300' : 'border-amber-500/20 bg-amber-500/10 text-amber-300'}`}>
+                  {bankReady(bank) ? 'Ready' : 'Needs work'}
+                </span>
+              </div>
+            </button>
+          {/each}
+        </div>
+      {:else if myBank}
+        <div class="space-y-5 p-5">
+          <div class="flex items-start gap-4">
+            <div class="flex h-14 w-14 items-center justify-center overflow-hidden rounded-2xl border border-white/[0.08] bg-white/[0.05] text-sm font-semibold text-indigo-300">
+              {#if myBank.branding?.logo_url}
+                <img src={myBank.branding.logo_url} alt={myBank.displayName} class="h-full w-full object-cover" />
               {:else}
-                {bank.bankHandle?.slice(0,2).toUpperCase()}
+                {myBank.bankHandle?.slice(0, 2).toUpperCase()}
               {/if}
             </div>
             <div class="min-w-0">
-              <div class="flex items-center gap-2">
-                <div class="text-[13px] font-medium text-white truncate">{bank.branding?.display_name || bank.displayName}</div>
-                {#if bank.branding?.brand_color}
-                  <span class="h-2.5 w-2.5 rounded-full border border-white/20" style={`background:${bank.branding.brand_color}`}></span>
-                {/if}
-              </div>
-              <div class="text-[11px] text-white/25 font-mono truncate">{bank.bankHandle} · {bank.branding?.support_email || 'support not set'}</div>
+              <p class="text-[11px] uppercase tracking-[0.16em] text-white/30">Directory identity</p>
+              <h3 class="mt-1 truncate text-xl font-semibold">{myBank.branding?.display_name || myBank.displayName}</h3>
+              <p class="mt-1 text-sm text-white/40">{myBank.bankHandle} · {myBank.country}</p>
             </div>
-            <span class="text-[12px] text-white/35">{bank.country}</span>
-            <span class="text-[11px] px-2.5 py-1 rounded-full border w-fit
-              {bank.active
-                ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
-                : 'bg-white/[0.03] text-white/25 border-white/[0.08]'}">
-              {bank.active ? 'active' : 'inactive'}
-            </span>
-            <span class="text-[11px] text-white/20">
-              {bank.registeredAt ? new Date(bank.registeredAt).toLocaleDateString() : '—'}
-            </span>
-            {#if isAdmin || bank.bankHandle === session?.bankHandle}
-              <button onclick={() => openBranding(bank)} class="text-[11px] px-2.5 py-1.5 rounded-lg border border-white/[0.08] text-white/40 hover:text-white hover:border-white/20 transition-all">
-                {isAdmin ? 'Brand' : 'Manage'}
-              </button>
-            {/if}
           </div>
-        {/each}
-      </div>
-    </div>
-  {/if}
-</div>
-
-{#if selectedBank}
-  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 backdrop-blur-sm">
-    <div class="w-full max-w-lg rounded-3xl border border-white/[0.09] bg-[#0d0d14] p-6 shadow-2xl">
-      <div class="mb-5 flex items-start gap-3">
-        <div class="flex h-12 w-12 items-center justify-center overflow-hidden rounded-2xl border border-white/[0.1] bg-white/[0.05] text-[11px] font-bold text-indigo-300">
-          {#if editForm.logoUrl}
-            <img src={editForm.logoUrl} alt={editForm.displayName} class="h-full w-full object-cover" />
-          {:else}
-            {selectedBank.bankHandle?.slice(0,2).toUpperCase()}
-          {/if}
+          <button onclick={() => goto(`/portal/banks/${myBank.bankHandle}`)} class="w-full rounded-xl bg-indigo-600 py-3 text-[13px] font-semibold text-white transition-all hover:bg-indigo-500">
+            Open my bank desk
+          </button>
         </div>
-        <div class="min-w-0">
-          <h2 class="text-lg font-semibold tracking-tight">{isAdmin ? 'Bank branding' : 'My bank profile'}</h2>
-          <p class="mt-1 text-[12px] text-white/35">Shown in the public directory and bank-scoped account management surfaces. Core routing and keys remain controlled by registry admins.</p>
-        </div>
-      </div>
-
-      <div class="grid grid-cols-2 gap-3">
-        <div class="col-span-2">
-          <label for="identity-bank-display-name" class="mb-1.5 block text-[11px] uppercase tracking-wider text-white/35">Display name</label>
-          <input id="identity-bank-display-name" bind:value={editForm.displayName} class="w-full rounded-xl border border-white/[0.1] bg-white/[0.05] px-3.5 py-2.5 text-[13px] text-white outline-none focus:border-indigo-500/60" />
-        </div>
-        <div>
-          <label for="identity-bank-brand-color" class="mb-1.5 block text-[11px] uppercase tracking-wider text-white/35">Brand color</label>
-          <input id="identity-bank-brand-color" bind:value={editForm.brandColor} placeholder="#07315F" class="w-full rounded-xl border border-white/[0.1] bg-white/[0.05] px-3.5 py-2.5 text-[13px] text-white outline-none focus:border-indigo-500/60" />
-        </div>
-        <div>
-          <label for="identity-bank-support-email" class="mb-1.5 block text-[11px] uppercase tracking-wider text-white/35">Support email</label>
-          <input id="identity-bank-support-email" bind:value={editForm.supportEmail} placeholder="support@bank.ly" class="w-full rounded-xl border border-white/[0.1] bg-white/[0.05] px-3.5 py-2.5 text-[13px] text-white outline-none focus:border-indigo-500/60" />
-        </div>
-        <div class="col-span-2">
-          <label for="identity-bank-website" class="mb-1.5 block text-[11px] uppercase tracking-wider text-white/35">Website</label>
-          <input id="identity-bank-website" bind:value={editForm.website} placeholder="https://bank.ly" class="w-full rounded-xl border border-white/[0.1] bg-white/[0.05] px-3.5 py-2.5 text-[13px] text-white outline-none focus:border-indigo-500/60" />
-        </div>
-      </div>
-
-      <div class="mt-5 flex flex-wrap items-center gap-2">
-        <label class="cursor-pointer rounded-xl border border-white/[0.1] px-4 py-2.5 text-[13px] font-semibold text-white/50 transition-all hover:border-white/20 hover:text-white">
-          Upload logo
-          <input type="file" accept="image/png,image/jpeg,image/webp" class="hidden" onchange={uploadLogo} />
-        </label>
-        <button onclick={saveBranding} disabled={editLoading} class="rounded-xl bg-indigo-600 px-5 py-2.5 text-[13px] font-semibold text-white transition-all hover:bg-indigo-500 disabled:opacity-30">
-          {editLoading ? 'Saving...' : 'Save branding'}
-        </button>
-        <button onclick={() => selectedBank = null} class="rounded-xl border border-white/[0.1] px-5 py-2.5 text-[13px] font-semibold text-white/45 transition-all hover:border-white/20 hover:text-white">
-          Cancel
-        </button>
-      </div>
-    </div>
+      {/if}
+    </section>
   </div>
-{/if}
+</div>

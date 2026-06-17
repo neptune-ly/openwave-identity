@@ -6,7 +6,10 @@ import ly.openwave.identity.entity.IdentityStatus
 import ly.openwave.identity.entity.LinkedAccountEntity
 import ly.openwave.identity.entity.PortalEmailOtpEntity
 import ly.openwave.identity.entity.PortalAuditEventEntity
+import ly.openwave.identity.entity.PortalBankLoginChallengeEntity
 import ly.openwave.identity.entity.PortalUserEntity
+import ly.openwave.identity.entity.PortalLoginChallengeEntity
+import ly.openwave.identity.entity.BankLoginChallengeStatus
 import ly.openwave.identity.entity.PortalUserPasskeyEntity
 import ly.openwave.identity.entity.PortalWebAuthnChallengeEntity
 import org.springframework.data.jpa.repository.JpaRepository
@@ -25,6 +28,7 @@ interface BankRepository : JpaRepository<BankEntity, Long> {
     fun findByPortalUsername(username: String): BankEntity?
     fun existsByBankHandle(handle: String): Boolean
     fun findByApiKeyHash(hash: String): BankEntity?
+    fun countByActiveTrue(): Long
     fun findAllByActiveTrue(): List<BankEntity>
     fun findAllByCountryAndActiveTrue(country: String): List<BankEntity>
 }
@@ -40,7 +44,111 @@ interface PortalUserRepository : JpaRepository<PortalUserEntity, Long> {
     fun findByUsername(username: String): PortalUserEntity?
     fun findByEmail(email: String): PortalUserEntity?
     fun existsByUsername(username: String): Boolean
+    fun countByActiveTrue(): Long
+    fun countByRole(role: ly.openwave.identity.entity.PortalRole): Long
+    fun countByRoleAndActiveTrue(role: ly.openwave.identity.entity.PortalRole): Long
     fun findAllByBankHandle(bankHandle: String): List<PortalUserEntity>
+}
+
+@Repository
+interface PortalLoginChallengeRepository : JpaRepository<PortalLoginChallengeEntity, String> {
+    fun findTopByUserOrderByCreatedAtDesc(user: PortalUserEntity): Optional<PortalLoginChallengeEntity>
+}
+
+@Repository
+interface PortalBankLoginChallengeRepository : JpaRepository<PortalBankLoginChallengeEntity, String> {
+    @Query(
+        """
+        SELECT c FROM PortalBankLoginChallengeEntity c
+        WHERE c.id = :challengeId
+          AND c.identity.id = :identityId
+        """
+    )
+    fun findForIdentityByChallengeId(
+        @Param("challengeId") challengeId: String,
+        @Param("identityId") identityId: Long
+    ): Optional<PortalBankLoginChallengeEntity>
+
+    @Query(
+        """
+        SELECT c FROM PortalBankLoginChallengeEntity c
+        WHERE c.identity.id = :identityId
+          AND (:status IS NULL OR c.status = :status)
+        ORDER BY c.createdAt DESC
+        """
+    )
+    fun findForIdentity(
+        @Param("identityId") identityId: Long,
+        @Param("status") status: BankLoginChallengeStatus?,
+        pageable: Pageable
+    ): Page<PortalBankLoginChallengeEntity>
+
+    @Query(
+        """
+        SELECT DISTINCT c FROM PortalBankLoginChallengeEntity c
+        JOIN c.identity i
+        JOIN i.linkedAccounts a
+        WHERE c.id = :challengeId
+          AND a.bankHandle = :bankHandle
+        """
+    )
+    fun findForBankByChallengeId(
+        @Param("challengeId") challengeId: String,
+        @Param("bankHandle") bankHandle: String
+    ): Optional<PortalBankLoginChallengeEntity>
+
+    @Query(
+        """
+        SELECT c FROM PortalBankLoginChallengeEntity c
+        JOIN c.identity i
+        JOIN i.linkedAccounts a
+        WHERE c.status = :status
+          AND c.expiresAt > :now
+          AND a.bankHandle = :bankHandle
+          AND a.bankCustomerRef = :bankCustomerRef
+        ORDER BY c.createdAt DESC
+        """
+    )
+    fun findPendingForBankCustomer(
+        @Param("bankHandle") bankHandle: String,
+        @Param("bankCustomerRef") bankCustomerRef: String,
+        @Param("status") status: BankLoginChallengeStatus,
+        @Param("now") now: Instant
+    ): List<PortalBankLoginChallengeEntity>
+
+    @Query(
+        """
+        SELECT DISTINCT c FROM PortalBankLoginChallengeEntity c
+        JOIN c.identity i
+        JOIN i.linkedAccounts a
+        WHERE a.bankHandle = :bankHandle
+          AND (:status IS NULL OR c.status = :status)
+          AND (
+            :needle IS NULL OR
+            LOWER(CAST(i.nptHandle AS string)) LIKE CONCAT('%', CAST(:needle AS string), '%') OR
+            LOWER(CAST(COALESCE(a.bankCustomerRef, '') AS string)) LIKE CONCAT('%', CAST(:needle AS string), '%') OR
+            LOWER(CAST(COALESCE(c.identifierHint, '') AS string)) LIKE CONCAT('%', CAST(:needle AS string), '%')
+          )
+        ORDER BY c.createdAt DESC
+        """
+    )
+    fun findForBank(
+        @Param("bankHandle") bankHandle: String,
+        @Param("status") status: BankLoginChallengeStatus?,
+        @Param("needle") needle: String?
+    ): List<PortalBankLoginChallengeEntity>
+
+    @Query(
+        """
+        SELECT COUNT(c) FROM PortalBankLoginChallengeEntity c
+        WHERE c.status = :status
+          AND c.expiresAt > :now
+        """
+    )
+    fun countByStatusAndExpiresAtAfter(
+        @Param("status") status: BankLoginChallengeStatus,
+        @Param("now") now: Instant
+    ): Long
 }
 
 @Repository
@@ -68,6 +176,8 @@ interface IdentityRepository : JpaRepository<IdentityEntity, Long> {
     fun findByNationalId(nationalId: String): IdentityEntity?
     fun findByPhone(phone: String): IdentityEntity?
     fun existsByNptHandle(handle: String): Boolean
+    fun countByStatus(status: IdentityStatus): Long
+    fun countByDefaultBankHandleIsNullAndStatus(status: IdentityStatus): Long
     fun countByStatusNot(status: ly.openwave.identity.entity.IdentityStatus): Long
 
     @Query(
@@ -78,11 +188,11 @@ interface IdentityRepository : JpaRepository<IdentityEntity, Long> {
               AND (:activeOnly = false OR i.status = :activeStatus)
               AND (
                 :needle IS NULL OR
-                LOWER(i.nptHandle) LIKE CONCAT('%', :needle, '%') OR
-                LOWER(i.displayName) LIKE CONCAT('%', :needle, '%') OR
-                LOWER(COALESCE(a.bankCustomerRef, '')) LIKE CONCAT('%', :needle, '%') OR
-                LOWER(COALESCE(a.displayName, '')) LIKE CONCAT('%', :needle, '%') OR
-                LOWER(COALESCE(a.iban, '')) LIKE CONCAT('%', :needle, '%')
+                LOWER(CAST(i.nptHandle AS string)) LIKE CONCAT('%', CAST(:needle AS string), '%') OR
+                LOWER(CAST(i.displayName AS string)) LIKE CONCAT('%', CAST(:needle AS string), '%') OR
+                LOWER(CAST(COALESCE(a.bankCustomerRef, '') AS string)) LIKE CONCAT('%', CAST(:needle AS string), '%') OR
+                LOWER(CAST(COALESCE(a.displayName, '') AS string)) LIKE CONCAT('%', CAST(:needle AS string), '%') OR
+                LOWER(CAST(COALESCE(a.iban, '') AS string)) LIKE CONCAT('%', CAST(:needle AS string), '%')
               )
             """,
         countQuery = """
@@ -92,11 +202,11 @@ interface IdentityRepository : JpaRepository<IdentityEntity, Long> {
               AND (:activeOnly = false OR i.status = :activeStatus)
               AND (
                 :needle IS NULL OR
-                LOWER(i.nptHandle) LIKE CONCAT('%', :needle, '%') OR
-                LOWER(i.displayName) LIKE CONCAT('%', :needle, '%') OR
-                LOWER(COALESCE(a.bankCustomerRef, '')) LIKE CONCAT('%', :needle, '%') OR
-                LOWER(COALESCE(a.displayName, '')) LIKE CONCAT('%', :needle, '%') OR
-                LOWER(COALESCE(a.iban, '')) LIKE CONCAT('%', :needle, '%')
+                LOWER(CAST(i.nptHandle AS string)) LIKE CONCAT('%', CAST(:needle AS string), '%') OR
+                LOWER(CAST(i.displayName AS string)) LIKE CONCAT('%', CAST(:needle AS string), '%') OR
+                LOWER(CAST(COALESCE(a.bankCustomerRef, '') AS string)) LIKE CONCAT('%', CAST(:needle AS string), '%') OR
+                LOWER(CAST(COALESCE(a.displayName, '') AS string)) LIKE CONCAT('%', CAST(:needle AS string), '%') OR
+                LOWER(CAST(COALESCE(a.iban, '') AS string)) LIKE CONCAT('%', CAST(:needle AS string), '%')
               )
             """
     )
@@ -119,6 +229,8 @@ interface LinkedAccountRepository : JpaRepository<LinkedAccountEntity, Long> {
     fun existsByIdentityIdAndIban(identityId: Long, iban: String): Boolean
     fun findAllByIdentityId(identityId: Long): List<LinkedAccountEntity>
     fun existsByIdentityIdAndBankHandle(identityId: Long, bankHandle: String): Boolean
+    fun existsByIdentityIdAndBankHandleAndBankCustomerRef(identityId: Long, bankHandle: String, bankCustomerRef: String): Boolean
+    fun countByIsDefaultTrue(): Long
 
     @Modifying
     @Query("UPDATE LinkedAccountEntity l SET l.isDefault = false WHERE l.identity.id = :identityId AND l.bankHandle = :bankHandle")

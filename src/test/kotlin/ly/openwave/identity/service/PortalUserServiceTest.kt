@@ -3,6 +3,7 @@ package ly.openwave.identity.service
 import ly.openwave.identity.entity.PortalRole
 import ly.openwave.identity.entity.PortalUserEntity
 import ly.openwave.identity.repository.BankRepository
+import ly.openwave.identity.repository.IdentityRepository
 import ly.openwave.identity.repository.PortalUserRepository
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -30,6 +31,9 @@ class PortalUserServiceTest {
     private lateinit var bankRepo: BankRepository
 
     @Mock
+    private lateinit var identityRepo: IdentityRepository
+
+    @Mock
     private lateinit var notificationService: PortalCredentialNotificationService
 
     private lateinit var service: PortalUserService
@@ -38,7 +42,7 @@ class PortalUserServiceTest {
 
     @BeforeEach
     fun setUp() {
-        service = PortalUserService(portalUserRepo, bankRepo, notificationService)
+        service = PortalUserService(portalUserRepo, bankRepo, identityRepo, notificationService)
         `when`(portalUserRepo.save(any(PortalUserEntity::class.java))).thenAnswer { it.arguments[0] }
     }
 
