@@ -55,19 +55,19 @@
   }
 
   const allNav = [
-    { href: '/portal',           label: 'Dashboard',  icon: LayoutDashboard, exact: true,  roles: ['ADMIN','BANK','CUSTOMER'] },
-    { href: '/portal/identity',  label: 'Identity',   icon: Users,           exact: false, roles: ['ADMIN'] },
-    { href: '/portal/identity',  label: 'Registered Customers', icon: Users, exact: false, roles: ['BANK'] },
-    { href: '/portal/customer',  label: 'My Accounts', icon: Users,          exact: false, roles: ['CUSTOMER'] },
-    { href: '/portal/banks',     label: 'Banks',      icon: Building2,       exact: false, roles: ['ADMIN'] },
-    { href: '/portal/banks',     label: 'My Bank',    icon: Building2,       exact: false, roles: ['BANK'] },
+    { href: '/portal',              label: 'Dashboard',         icon: LayoutDashboard, exact: true,  roles: ['ADMIN', 'BANK', 'CUSTOMER'] },
+    { href: '/portal/identity',     label: 'Identity',          icon: Users,           exact: false, roles: ['ADMIN'] },
+    { href: '/portal/identity',     label: 'Customers',         icon: Users,           exact: false, roles: ['BANK'] },
+    { href: '/portal/customer',     label: 'My Accounts',       icon: Users,           exact: false, roles: ['CUSTOMER'] },
+    { href: '/portal/banks',        label: 'Banks Directory',   icon: Building2,       exact: false, roles: ['ADMIN'] },
+    { href: '/portal/my-bank',      label: 'My Bank Desk',      icon: Building2,       exact: false, roles: ['BANK'] },
     { href: '/portal/customer/login-approvals', label: 'Sign-in Activity', icon: BellRing, exact: false, roles: ['CUSTOMER'] },
-    { href: '/portal/login-approvals', label: 'Login Approvals', icon: BellRing, exact: false, roles: ['BANK'] },
-    { href: '/portal/reports',   label: 'Reports',    icon: ClipboardList,   exact: false, roles: ['BANK'] },
-    { href: '/portal/users',     label: 'Users',      icon: UserCog,         exact: false, roles: ['ADMIN','BANK'] },
-    { href: '/portal/manage',    label: 'Manage',     icon: Settings,        exact: false, roles: ['ADMIN'] },
-    { href: '/portal/audit',     label: 'Audit',      icon: ClipboardList,   exact: false, roles: ['ADMIN'] },
-    { href: '/portal/security',  label: 'Security',   icon: KeyRound,        exact: false, roles: ['ADMIN','BANK','CUSTOMER'] },
+    { href: '/portal/login-approvals', label: 'Login Approvals', icon: BellRing,     exact: false, roles: ['BANK'] },
+    { href: '/portal/reports',      label: 'Reports',           icon: ClipboardList,   exact: false, roles: ['ADMIN', 'BANK'] },
+    { href: '/portal/users',        label: 'Users',             icon: UserCog,         exact: false, roles: ['ADMIN', 'BANK'] },
+    { href: '/portal/manage',       label: 'Manage',            icon: Settings,        exact: false, roles: ['ADMIN'] },
+    { href: '/portal/audit',        label: 'Audit',             icon: ClipboardList,   exact: false, roles: ['ADMIN'] },
+    { href: '/portal/security',     label: 'Security',          icon: KeyRound,        exact: false, roles: ['ADMIN', 'BANK', 'CUSTOMER'] },
   ];
 
   const nav = $derived(allNav.filter(n => !session?.role || n.roles.includes(session.role)));

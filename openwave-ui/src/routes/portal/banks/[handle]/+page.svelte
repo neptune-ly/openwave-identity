@@ -9,19 +9,33 @@
   import ArrowLeft from 'lucide-svelte/icons/arrow-left';
   import RefreshCw from 'lucide-svelte/icons/refresh-cw';
   import Upload from 'lucide-svelte/icons/upload';
-  import Building2 from 'lucide-svelte/icons/building-2';
   import Palette from 'lucide-svelte/icons/palette';
   import ShieldCheck from 'lucide-svelte/icons/shield-check';
   import Mail from 'lucide-svelte/icons/mail';
   import Globe from 'lucide-svelte/icons/globe';
   import Landmark from 'lucide-svelte/icons/landmark';
   import CircleCheckBig from 'lucide-svelte/icons/circle-check-big';
+  import Users from 'lucide-svelte/icons/users';
+  import Search from 'lucide-svelte/icons/search';
+  import Download from 'lucide-svelte/icons/download';
+  import ChevronLeft from 'lucide-svelte/icons/chevron-left';
+  import ChevronRight from 'lucide-svelte/icons/chevron-right';
+  import ExternalLink from 'lucide-svelte/icons/external-link';
+  import UserRoundCog from 'lucide-svelte/icons/user-round-cog';
 
   let session = $state(null);
   let loading = $state(true);
   let saving = $state(false);
   let bank = $state(null);
   let form = $state({ displayName: '', brandColor: '', supportEmail: '', website: '', logoUrl: '' });
+  let customers = $state([]);
+  let customersLoading = $state(false);
+  let customersExporting = $state(false);
+  let customerSearch = $state('');
+  let customerPage = $state(0);
+  let customerTotalPages = $state(1);
+  let customerTotal = $state(0);
+  const customerLimit = 10;
   const currentSection = $derived(readSection());
   const operationsPackage = $derived(bank?.operationsPackage ?? null);
 
@@ -42,13 +56,19 @@
       label: 'Preview',
       purpose: 'See how the bank profile appears in Identity-facing surfaces before operators or partners rely on it.',
       action: 'Review public appearance'
+    },
+    customers: {
+      label: 'Customers',
+      purpose: 'Review bank-scoped identities and linked routes in one support-safe workspace.',
+      action: 'Review registered customers'
     }
   };
-  const sectionItems = [
-    { key: 'profile', label: 'Profile', action: 'Edit public bank profile', hint: 'Public bank record, contact, and website' },
-    { key: 'readiness', label: 'Readiness', action: 'Review trust and readiness', hint: 'Enrollment, approval, and public-profile posture' },
-    { key: 'preview', label: 'Preview', action: 'Review public appearance', hint: 'How the bank record reads in Identity surfaces' }
-  ];
+  const sectionItems = $derived([
+    { key: 'profile', label: 'Profile', icon: UserRoundCog, action: 'Edit public bank profile', hint: 'Public bank record, contact, and website' },
+    { key: 'readiness', label: 'Readiness', icon: ShieldCheck, action: 'Review trust and readiness', hint: 'Enrollment, approval, and public-profile posture' },
+    { key: 'preview', label: 'Preview', icon: Globe, action: 'Review public appearance', hint: 'How the bank record reads in Identity surfaces' },
+    { key: 'customers', label: 'Customers', icon: Users, action: 'Review registered customers', hint: 'Bank-scoped alias list and linked-route summary' }
+  ].filter((item) => item.key !== 'customers' || !isAdmin));
 
   onMount(async () => {
     session = get(auth);
@@ -65,10 +85,13 @@
     }
     const payload = response.data;
     if (!isAdmin && payload.bankHandle !== bankHandle) {
-      await goto('/portal/banks');
+      await goto('/portal/my-bank');
       return;
     }
     bank = payload;
+    if (!isAdmin) {
+      void loadCustomers();
+    }
     form = {
       displayName: bank.branding?.display_name || bank.displayName || '',
       brandColor: bank.branding?.brand_color || '',
@@ -112,6 +135,118 @@
     }
   }
 
+  async function loadCustomers() {
+    if (isAdmin) return;
+    customersLoading = true;
+    const params = new URLSearchParams({
+      activeOnly: 'true',
+      page: String(customerPage),
+      limit: String(customerLimit)
+    });
+    const trimmedSearch = customerSearch.trim();
+    if (trimmedSearch) params.set('search', trimmedSearch);
+
+    const response = await apiCall('get', `/identity/accounts?${params.toString()}`);
+    customersLoading = false;
+    if (!response.ok) {
+      toast.error(response.error || 'Could not load registered customers');
+      customers = [];
+      customerTotal = 0;
+      customerTotalPages = 1;
+      return;
+    }
+
+    customers = response.data.aliases || [];
+    customerTotal = response.data.total ?? customers.length;
+    customerTotalPages = response.data.totalPages ?? 1;
+    customerPage = response.data.page ?? customerPage;
+  }
+
+  async function applyCustomerSearch() {
+    customerPage = 0;
+    await loadCustomers();
+  }
+
+  function resetCustomerFilters() {
+    customerSearch = '';
+    customerPage = 0;
+    void loadCustomers();
+  }
+
+  async function nextCustomerPage() {
+    if (customerPage + 1 >= customerTotalPages || customersLoading) return;
+    customerPage += 1;
+    await loadCustomers();
+  }
+
+  async function previousCustomerPage() {
+    if (customerPage <= 0 || customersLoading) return;
+    customerPage -= 1;
+    await loadCustomers();
+  }
+
+  async function exportCustomers() {
+    if (customersExporting || isAdmin) return;
+    customersExporting = true;
+    try {
+      const params = new URLSearchParams({
+        activeOnly: 'true',
+        page: '0',
+        limit: '1000',
+        format: 'csv'
+      });
+      const trimmedSearch = customerSearch.trim();
+      if (trimmedSearch) params.set('search', trimmedSearch);
+      const response = await getApi().get(`/identity/accounts?${params.toString()}`, { responseType: 'blob' });
+      const blob = new Blob([response.data], { type: 'text/csv;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `identity-customers-${bank?.bankHandle || 'bank'}-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      toast.success('Customer ledger CSV exported');
+    } catch (error) {
+      toast.error(error?.response?.data?.message || 'Could not export customer ledger');
+    } finally {
+      customersExporting = false;
+    }
+  }
+
+  function openAliasDesk(alias) {
+    const target = alias?.fullAlias || alias?.alias;
+    if (!target) return;
+    void goto(`/portal/reports/${encodeURIComponent(target)}`);
+  }
+
+  function aliasStatusClass(isActive) {
+    return isActive !== false
+      ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-200'
+      : 'border-amber-500/25 bg-amber-500/10 text-amber-200';
+  }
+
+  function aliasStatusLabel(isActive) {
+    return isActive === false ? 'Inactive' : 'Active';
+  }
+
+  function aliasDefaultText(row) {
+    const defaultAccount = row?.accounts?.find((item) => item.isDefault);
+    return defaultAccount
+      ? `Default ${defaultAccount.ibanMasked || ''} ${defaultAccount.currency || ''}`.trim()
+      : 'No default route';
+  }
+
+  function aliasSummary(row) {
+    const rowAccounts = row?.accounts || [];
+    return `${rowAccounts.length} linked account(s) · ${aliasDefaultText(row)}`;
+  }
+
+  function formatDateTime(value) {
+    return value ? new Date(value).toLocaleString() : '-';
+  }
+
   function readinessRows() {
     if (!bank) return [];
     return [
@@ -141,19 +276,29 @@
   }
 
   function readSection() {
-    const section = get(page).url.searchParams.get('section');
-    return ['profile', 'readiness', 'preview'].includes(section) ? section : 'profile';
+    const next = get(page).url.searchParams.get('section');
+    const legacy = get(page).url.searchParams.get('tab');
+
+    const legacyMap = {
+      overview: 'readiness',
+      ready: 'readiness',
+      readiness: 'readiness',
+      profile: 'profile',
+      settings: 'profile',
+      preview: 'preview',
+      customers: 'customers',
+      registry: 'customers'
+    };
+
+    const requested = next || legacy;
+    const resolvedLegacy = requested ? legacyMap[String(requested).toLowerCase()] : null;
+    const section = resolvedLegacy || requested;
+    const allowed = isAdmin ? ['profile', 'readiness', 'preview'] : ['profile', 'readiness', 'preview', 'customers'];
+    return allowed.includes(String(section)) ? section : (isAdmin ? 'profile' : 'customers');
   }
 
   function sectionHref(section) {
     return section === 'profile' ? `/portal/banks/${bankHandle}` : `/portal/banks/${bankHandle}?section=${section}`;
-  }
-
-  async function setSectionRoute(section) {
-    const next = new URL(get(page).url);
-    if (section === 'profile') next.searchParams.delete('section');
-    else next.searchParams.set('section', section);
-    await goto(`${next.pathname}${next.search}`, { replaceState: true, noScroll: true, keepFocus: true });
   }
 
   function readinessSummary() {
@@ -173,10 +318,10 @@
 <svelte:head><title>Bank Desk - OpenWave Identity</title></svelte:head>
 
 <div class="mx-auto max-w-6xl space-y-6 p-8">
-  <div class="flex flex-wrap items-center justify-between gap-3">
-    <a href="/portal/banks" class="identity-shell-button inline-flex items-center gap-2 rounded-xl border px-4 py-2 text-[13px] font-medium transition-all hover:text-white">
+    <div class="flex flex-wrap items-center justify-between gap-3">
+    <a href={isAdmin ? '/portal/banks' : '/portal/my-bank'} class="identity-shell-button inline-flex items-center gap-2 rounded-xl border px-4 py-2 text-[13px] font-medium transition-all hover:text-white">
       <ArrowLeft class="h-4 w-4" />
-      Back to bank registry
+      {isAdmin ? 'Back to bank directory' : 'Back to my bank desk'}
     </a>
     <button onclick={loadBank} disabled={loading || saving} class="identity-shell-button inline-flex items-center gap-2 rounded-xl border px-4 py-2 text-[13px] font-medium transition-all hover:text-white disabled:opacity-40">
       <RefreshCw class={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
@@ -257,6 +402,7 @@
         <p class="identity-desk-rail-title">Bank desk</p>
         <div class="identity-desk-nav" role="tablist" aria-label="Bank desk sections">
           {#each sectionItems as item}
+            {@const Icon = item.icon}
             <a
               href={sectionHref(item.key)}
               role="tab"
@@ -264,6 +410,9 @@
               class={`identity-desk-nav-item ${currentSection === item.key ? 'is-active' : ''}`}
               title={`${item.label} · ${item.hint}`}
             >
+              {#if Icon}
+                <Icon class="mt-1 h-4 w-4 text-white/70" />
+              {/if}
               <div class="identity-desk-nav-copy">
                 <div class="identity-desk-nav-label">{item.label}</div>
                 <div class="identity-desk-nav-hint">{item.hint}</div>
@@ -367,6 +516,120 @@
     {/if}
 
     <div class="identity-section-stack">
+      {#if currentSection === 'customers'}
+        <section class="identity-section-card">
+          <div class="identity-section-card-header">
+            <div>
+              <div class="identity-section-card-title">Registered customers desk</div>
+              <div class="mt-1 text-[12px] text-white/35">Bank-scoped customer registry, alias coverage, and route visibility.</div>
+            </div>
+            <div class="flex flex-wrap gap-2">
+              <button onclick={exportCustomers} disabled={customersExporting || customersLoading} class="rounded-xl border border-white/[0.1] px-3 py-2 text-[12px] font-medium text-white/75 transition-all hover:bg-white/[0.08] disabled:opacity-50">
+                <Download class="inline-block h-3.5 w-3.5 mr-1.5 align-middle" />
+                {customersExporting ? 'Exporting...' : 'Export CSV'}
+              </button>
+            </div>
+          </div>
+
+          <div class="mt-4 grid gap-3 md:grid-cols-[1fr_auto_auto]">
+            <label class="relative">
+              <Search class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/40" />
+              <input
+                bind:value={customerSearch}
+                onkeydown={(event) => event.key === 'Enter' && applyCustomerSearch()}
+                placeholder="Search alias, customer ref, or masked IBAN"
+                class="w-full rounded-xl border border-white/[0.1] bg-white/[0.05] py-2.5 pl-9 pr-3 text-[13px] text-white placeholder:text-white/25 outline-none focus:border-indigo-400/60"
+              />
+            </label>
+            <button
+              onclick={applyCustomerSearch}
+              disabled={customersLoading}
+              class="rounded-xl bg-indigo-600 px-4 py-2 text-[13px] font-medium text-white hover:bg-indigo-500 disabled:opacity-40"
+            >
+              {customersLoading ? 'Loading...' : 'Search'}
+            </button>
+            <button onclick={resetCustomerFilters} class="rounded-xl border border-white/[0.12] px-4 py-2 text-[13px] font-medium text-white/80 hover:bg-white/[0.05]">
+              Reset
+            </button>
+          </div>
+
+          <div class="mt-4 space-y-3">
+            <div class="grid gap-3 sm:grid-cols-3">
+              <div class="identity-surface-soft px-4 py-3">
+                <div class="text-[11px] uppercase tracking-[0.16em] text-white/30">Total customers</div>
+                <div class="mt-1 text-xl font-semibold text-white">{customerTotal}</div>
+              </div>
+              <div class="identity-surface-soft px-4 py-3">
+                <div class="text-[11px] uppercase tracking-[0.16em] text-white/30">Visible rows</div>
+                <div class="mt-1 text-xl font-semibold text-white">{customers.length}</div>
+              </div>
+              <div class="identity-surface-soft px-4 py-3">
+                <div class="text-[11px] uppercase tracking-[0.16em] text-white/30">Page</div>
+                <div class="mt-1 text-xl font-semibold text-white">{customerPage + 1} / {customerTotalPages}</div>
+              </div>
+            </div>
+
+            {#if customersLoading}
+              <div class="identity-surface-soft rounded-xl px-4 py-3 text-sm text-white/60">Loading linked customers...</div>
+            {:else if !customers.length}
+              <div class="identity-surface-soft rounded-xl px-4 py-4 text-sm text-white/50">No linked customers for this bank scope.</div>
+            {:else}
+              <div class="space-y-2">
+                {#each customers as customer}
+                  <div class="rounded-2xl border border-white/[0.08] bg-white/[0.03] p-3.5">
+                    <div class="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+                      <div class="min-w-0">
+                        <p class="truncate text-sm font-semibold text-white">{customer.fullAlias || customer.alias}</p>
+                        <p class="mt-1 text-[12px] text-white/50">Customer ID {customer.customerId || '—'} · enrolled {formatDateTime(customer.enrolledAt)}</p>
+                        <p class="mt-1 text-[12px] text-white/45">{aliasSummary(customer)}</p>
+                      </div>
+                      <div class="flex flex-wrap items-center gap-2">
+                        <span class={`rounded-full border px-2.5 py-1 text-[11px] font-medium ${aliasStatusClass(customer.isActive)}`}>{aliasStatusLabel(customer.isActive)}</span>
+                        <button onclick={() => openAliasDesk(customer)} class="rounded-xl border border-white/[0.14] px-3 py-2 text-[12px] font-medium text-white/75 hover:bg-white/[0.05]">
+                          Open identity
+                          <ExternalLink class="inline h-3.5 w-3.5 ml-1.5 align-middle" />
+                        </button>
+                      </div>
+                    </div>
+
+                    <div class="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                      {#each customer.accounts as account}
+                        <div class="identity-surface-soft px-3 py-2">
+                          <div class="text-[11px] uppercase tracking-[0.14em] text-white/30">{account.currency || 'Currency'}</div>
+                          <div class="mt-1 text-sm font-medium text-white">{account.ibanMasked || account.iban || 'IBAN hidden'}</div>
+                          {#if account.accountName}
+                            <div class="mt-1 text-[12px] text-white/45">{account.accountName}</div>
+                          {/if}
+                        </div>
+                      {/each}
+                    </div>
+                  </div>
+                {/each}
+              </div>
+            {/if}
+          </div>
+
+          <div class="mt-5 flex items-center justify-between">
+            <button
+              onclick={previousCustomerPage}
+              disabled={customersLoading || customerPage <= 0}
+              class="inline-flex items-center gap-2 rounded-xl border border-white/[0.12] px-3 py-2 text-[12px] font-medium text-white/75 hover:bg-white/[0.05] disabled:opacity-40"
+            >
+              <ChevronLeft class="h-4 w-4" />
+              Prev
+            </button>
+            <button
+              onclick={nextCustomerPage}
+              disabled={customersLoading || customerPage + 1 >= customerTotalPages}
+              class="inline-flex items-center gap-2 rounded-xl border border-white/[0.12] px-3 py-2 text-[12px] font-medium text-white/75 hover:bg-white/[0.05] disabled:opacity-40"
+            >
+              Next
+              <ChevronRight class="h-4 w-4" />
+            </button>
+          </div>
+        </section>
+      {/if}
+
       {#if currentSection === 'profile'}
         <section class="identity-section-card">
           <div class="identity-section-card-header">
