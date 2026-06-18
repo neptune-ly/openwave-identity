@@ -1,7 +1,7 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
   import { goto } from '$app/navigation';
-  import { page } from '$app/stores';
+  import { page } from '$app/state';
   import { auth } from '$lib/stores/auth';
   import { get } from 'svelte/store';
   import LogOut from 'lucide-svelte/icons/log-out';
@@ -83,9 +83,8 @@
       const response = await getApi().get('/auth/profile');
       profile = response.data || null;
       passkeyCount = response.data?.passkeyCount ?? 0;
-      const route = get(page).url;
-      const currentPath = `${route.pathname}${route.search}`;
-      if (session?.role === 'CUSTOMER' && response.data?.securitySetupRequired && route.pathname !== '/portal/security') {
+      const currentPath = `${page.url.pathname}${page.url.search}`;
+      if (session?.role === 'CUSTOMER' && response.data?.securitySetupRequired && page.url.pathname !== '/portal/security') {
         await goto(`/portal/security?return=${encodeURIComponent(currentPath)}`);
       }
     } catch {

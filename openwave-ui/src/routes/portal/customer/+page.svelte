@@ -1,7 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
-  import { page as appPage } from '$app/state';
+  import { page } from '$app/state';
   import { getApi } from '$lib/api/client';
   import { toast } from 'svelte-sonner';
   import RefreshCw from 'lucide-svelte/icons/refresh-cw';
@@ -55,14 +55,14 @@
   }
 
   async function syncQuery(item = selectedAccount ? accountKey(selectedAccount) : '') {
-    const params = new URLSearchParams(appPage.url.searchParams);
+    const params = new URLSearchParams(page.url.searchParams);
     const section = readSection();
     if (section === 'access') params.delete('section');
     else params.set('section', section);
     if (item) params.set('item', item);
     else params.delete('item');
     const query = params.toString();
-    await goto(query ? `${appPage.url.pathname}?${query}` : appPage.url.pathname, {
+      await goto(query ? `${page.url.pathname}?${query}` : page.url.pathname, {
       replaceState: true,
       noScroll: true,
       keepFocus: true
@@ -70,7 +70,7 @@
   }
 
   function syncSelectionFromQuery(accounts) {
-    const requested = appPage.url.searchParams.get('item');
+    const requested = page.url.searchParams.get('item');
     if (!requested || !accounts.length) return null;
     return accounts.find((account) => accountKey(account) === requested) || null;
   }
@@ -178,16 +178,16 @@
   }
 
   function readSection() {
-    const section = appPage.url.searchParams.get('section');
+    const section = page.url.searchParams.get('section');
     return ['access', 'approvals', 'routing', 'profile'].includes(section) ? section : 'access';
   }
 
   function sectionHref(section) {
-    const params = new URLSearchParams(appPage.url.searchParams);
+    const params = new URLSearchParams(page.url.searchParams);
     if (section === 'access') params.delete('section');
     else params.set('section', section);
     const query = params.toString();
-    return query ? `${appPage.url.pathname}?${query}` : appPage.url.pathname;
+    return query ? `${page.url.pathname}?${query}` : page.url.pathname;
   }
 </script>
 

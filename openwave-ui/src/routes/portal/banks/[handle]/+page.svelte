@@ -1,7 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
-  import { page } from '$app/stores';
+  import { page } from '$app/state';
   import { auth } from '$lib/stores/auth';
   import { apiCall, apiPublic, getApi } from '$lib/api/client';
   import { get } from 'svelte/store';
@@ -40,7 +40,7 @@
   const operationsPackage = $derived(bank?.operationsPackage ?? null);
 
   const isAdmin = $derived(session?.role === 'ADMIN');
-  const bankHandle = $derived(get(page).params.handle);
+  const bankHandle = $derived(page.params.handle);
   const sectionMeta = {
     profile: {
       label: 'Profile',
@@ -276,8 +276,8 @@
   }
 
   function readSection() {
-    const next = get(page).url.searchParams.get('section');
-    const legacy = get(page).url.searchParams.get('tab');
+    const next = page.url.searchParams.get('section');
+    const legacy = page.url.searchParams.get('tab');
 
     const legacyMap = {
       overview: 'readiness',
