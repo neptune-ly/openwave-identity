@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OpenWave Identity MCP</title>
+    <meta name="description" content="Role-scoped MCP access model for OpenWave Identity." />
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #f7f8fa;
+        --surface: #ffffff;
+        --ink: #111827;
+        --muted: #667085;
+        --line: #dfe4ea;
+        --brand: #07315f;
+        --accent: #245fff;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #07111d;
+          --surface: #0c1826;
+          --ink: #f7f8fa;
+          --muted: #b4c0c8;
+          --line: rgba(255, 255, 255, 0.12);
+          --brand: #7db4ff;
+          --accent: #8cb7ff;
+        }
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        line-height: 1.6;
+      }
+      .shell {
+        width: min(1040px, calc(100% - 32px));
+        margin: 0 auto;
+      }
+      header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 18px;
+        padding: 24px 0;
+      }
+      a {
+        color: var(--brand);
+        text-decoration: none;
+      }
+      nav {
+        display: flex;
+        gap: 16px;
+        flex-wrap: wrap;
+        color: var(--muted);
+        font-size: 14px;
+      }
+      main {
+        padding: 36px 0 72px;
+      }
+      .hero {
+        display: grid;
+        grid-template-columns: minmax(0, 1.1fr) minmax(320px, 0.9fr);
+        gap: 24px;
+        align-items: start;
+      }
+      h1 {
+        margin: 0 0 16px;
+        font-size: clamp(36px, 6vw, 72px);
+        line-height: 0.95;
+        letter-spacing: 0;
+      }
+      h2 {
+        margin: 0 0 12px;
+        font-size: 24px;
+      }
+      p {
+        margin: 0 0 16px;
+        color: var(--muted);
+      }
+      .card {
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        padding: 22px;
+        box-shadow: 0 18px 48px rgba(15, 23, 42, 0.08);
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 16px;
+        margin-top: 24px;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        overflow: hidden;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background: var(--surface);
+      }
+      th,
+      td {
+        padding: 13px 14px;
+        border-bottom: 1px solid var(--line);
+        text-align: left;
+        vertical-align: top;
+      }
+      th {
+        color: var(--muted);
+        font-size: 12px;
+        text-transform: uppercase;
+      }
+      code,
+      pre {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+      pre {
+        overflow: auto;
+        background: rgba(127, 127, 127, 0.08);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 16px;
+      }
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 5px 10px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+      @media (max-width: 800px) {
+        .hero,
+        .grid {
+          grid-template-columns: 1fr;
+        }
+        header {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="shell">
+      <a href="./"><strong>OpenWave Identity</strong></a>
+      <nav>
+        <a href="./">Overview</a>
+        <a href="https://neptune-ly.github.io/openwave-spec/api/identity.html">API reference</a>
+        <a href="https://neptune-ly.github.io/astro-sdk/guide/openwave-mcp.html">Astro MCP</a>
+        <a href="https://github.com/neptune-ly/openwave-identity">GitHub</a>
+      </nav>
+    </header>
+    <main class="shell">
+      <section class="hero">
+        <div>
+          <span class="pill">MCP access model</span>
+          <h1>Agent access without weakening the registry.</h1>
+          <p>
+            OpenWave Identity MCP exposes support-safe Identity tools for agents while keeping the
+            bank-vouched trust model intact. Agents call official Identity APIs with the same bank,
+            customer, or registry permissions as the portal.
+          </p>
+        </div>
+        <div class="card">
+          <h2>Default posture</h2>
+          <p>No direct database access. No raw secrets in prompts. No broad customer lookup without an authenticated role.</p>
+          <pre><code>OPENWAVE_IDENTITY_BASE_URL=https://identity.neptune.ly/v1
+OPENWAVE_MCP_ENABLE_MUTATIONS=false</code></pre>
+        </div>
+      </section>
+
+      <section class="grid">
+        <article class="card">
+          <h2>For registry owners</h2>
+          <p>Review registry health, bank readiness, portal access posture, and audit-safe operational summaries.</p>
+        </article>
+        <article class="card">
+          <h2>For banks</h2>
+          <p>Inspect only customers, aliases, linked accounts, and login approval work owned by the authenticated bank.</p>
+        </article>
+        <article class="card">
+          <h2>For customers</h2>
+          <p>Show linked NPT aliases, bank routes, and security posture through the customer portal session.</p>
+        </article>
+        <article class="card">
+          <h2>For developers</h2>
+          <p>Resolve public aliases, inspect bank directory metadata, and build fintech tools against clear role boundaries.</p>
+        </article>
+      </section>
+
+      <section style="margin-top: 24px">
+        <table>
+          <thead>
+            <tr>
+              <th>Scope</th>
+              <th>Credential</th>
+              <th>Allowed examples</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Public developer</td>
+              <td>None</td>
+              <td>Registry info, active bank directory, public alias resolution.</td>
+            </tr>
+            <tr>
+              <td>Bank</td>
+              <td><code>X-OpenWave-Bank-Key</code></td>
+              <td>Bank-scoped aliases, customer enrollment reports, bank readiness.</td>
+            </tr>
+            <tr>
+              <td>Customer</td>
+              <td><code>X-OpenWave-Portal-Session</code></td>
+              <td>Own aliases, linked accounts, passkey/TOTP posture, login approvals.</td>
+            </tr>
+            <tr>
+              <td>Registry owner</td>
+              <td>Registry key or admin portal session</td>
+              <td>Registry overview, participating banks, audit-safe operations.</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+    </main>
+  </body>
+</html>
