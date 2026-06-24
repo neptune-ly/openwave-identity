@@ -19,3 +19,11 @@ class RegistryProperties {
     var resolveCacheTtlSeconds: Int = 60
     var resolveRateLimitPerMinute: Int = 120
 }
+
+@Component
+@ConfigurationProperties(prefix = "oauth")
+class OAuthProperties {
+    var issuer: String = "https://identity.neptune.ly/v1"
+    var accessTokenTtlSeconds: Long = 900
+    var refreshTokenTtlSeconds: Long = 2_592_000
+}

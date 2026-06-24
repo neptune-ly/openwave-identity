@@ -66,9 +66,16 @@ class SecurityConfig(
                     "/auth/passkey/options/authenticate",
                     "/auth/passkey/authenticate",
                     "/registry/info",
+                    "/.well-known/**",
+                    "/oauth/token",
+                    "/oauth/revoke",
+                    "/oauth/introspect",
+                    "/oauth/jwks",
+                    "/oauth/authorize",
                     "/assets/**",
                     "/actuator/health"
                 ).permitAll()
+                it.requestMatchers("/oauth/admin/**").hasRole("ADMIN")
                 it.requestMatchers(HttpMethod.GET, "/banks/me").hasRole("BANK")
                 it.requestMatchers(HttpMethod.GET, "/banks", "/banks/*").permitAll()
                 it.requestMatchers(HttpMethod.PATCH, "/banks/me/branding").hasRole("BANK")
