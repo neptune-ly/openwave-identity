@@ -8,6 +8,8 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.config.annotation.web.builders.HttpSecurity
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity
 import org.springframework.security.config.http.SessionCreationPolicy
+import org.springframework.security.web.header.writers.ReferrerPolicyHeaderWriter
+import org.springframework.security.web.header.writers.XXssProtectionHeaderWriter
 import org.springframework.security.core.authority.SimpleGrantedAuthority
 import org.springframework.security.core.context.SecurityContextHolder
 import org.springframework.security.core.userdetails.UserDetailsService
@@ -56,6 +58,32 @@ class SecurityConfig(
             .httpBasic { it.disable() }
             .formLogin { it.disable() }
             .sessionManagement { it.sessionCreationPolicy(SessionCreationPolicy.STATELESS) }
+            // Defensive security response headers. This is a JSON/OAuth API surface, so the
+            // policy is deliberately strict: deny all framing, forbid MIME sniffing, send no
+            // referrer cross-origin, and instruct browsers/proxies never to cache token or
+            // identity responses. HSTS is emitted so TLS-terminating edges keep clients on https.
+            .headers { headers ->
+                headers.contentTypeOptions { }
+                headers.frameOptions { it.deny() }
+                headers.referrerPolicy {
+                    it.policy(ReferrerPolicyHeaderWriter.ReferrerPolicy.NO_REFERRER)
+                }
+                headers.xssProtection {
+                    it.headerValue(XXssProtectionHeaderWriter.HeaderValue.ENABLED_MODE_BLOCK)
+                }
+                headers.httpStrictTransportSecurity {
+                    it.includeSubDomains(true).maxAgeInSeconds(31_536_000)
+                }
+                headers.cacheControl { }
+                headers.addHeaderWriter { _, response ->
+                    if (!response.containsHeader("Content-Security-Policy")) {
+                        response.setHeader(
+                            "Content-Security-Policy",
+                            "default-src 'none'; frame-ancestors 'none'"
+                        )
+                    }
+                }
+            }
             .authorizeHttpRequests {
                 // Public endpoints — no auth
                 it.requestMatchers(

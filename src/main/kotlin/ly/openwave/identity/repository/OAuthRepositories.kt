@@ -18,6 +18,7 @@ interface OAuthTokenRepository : JpaRepository<OAuthTokenEntity, Long> {
     fun findByRefreshTokenHash(refreshTokenHash: String): OAuthTokenEntity?
     fun findAllByClientId(clientId: String): List<OAuthTokenEntity>
     fun findAllBySubject(subject: String): List<OAuthTokenEntity>
+    fun findAllByClientIdAndRevokedAtIsNull(clientId: String): List<OAuthTokenEntity>
 }
 
 interface OAuthSettingRepository : JpaRepository<OAuthSettingEntity, String> {

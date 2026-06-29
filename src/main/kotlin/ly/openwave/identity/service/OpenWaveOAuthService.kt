@@ -10,6 +10,7 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import org.springframework.web.server.ResponseStatusException
+import java.net.URI
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.time.Instant
@@ -88,7 +89,7 @@ class OpenWaveOAuthService(
                 ownerType = req.ownerType,
                 ownerId = req.ownerId,
                 ownerHandle = req.ownerHandle,
-                redirectUris = json.writeValueAsString(req.redirectUris.distinct()),
+                redirectUris = json.writeValueAsString(validateRedirectUris(req.redirectUris)),
                 allowedScopes = json.writeValueAsString(req.allowedScopes.distinct().filter { it in supportedScopes() }),
                 allowedEnvironments = req.allowedEnvironments.distinct().joinToString(","),
                 active = req.active,
@@ -110,7 +111,7 @@ class OpenWaveOAuthService(
     fun updateClient(clientId: String, req: UpdateOAuthClientRequest, authentication: Authentication?): Map<String, Any?> {
         val client = clients.findByClientId(clientId) ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "OAuth client not found")
         req.displayName?.let { client.displayName = it }
-        req.redirectUris?.let { client.redirectUris = json.writeValueAsString(it.distinct()) }
+        req.redirectUris?.let { client.redirectUris = json.writeValueAsString(validateRedirectUris(it)) }
         req.allowedScopes?.let { client.allowedScopes = json.writeValueAsString(it.distinct().filter { scope -> scope in supportedScopes() }) }
         req.allowedEnvironments?.let { client.allowedEnvironments = it.distinct().joinToString(",") }
         req.active?.let {
@@ -227,13 +228,31 @@ class OpenWaveOAuthService(
         return OAuthTokenIssueResult(accessToken, refreshToken, props.accessTokenTtlSeconds, granted.joinToString(" "))
     }
 
-    @Transactional
+    // noRollbackFor: when refresh-token reuse is detected we revoke the active token family and
+    // THEN throw 401. Without this, Spring would roll back the family-revocation along with the
+    // exception, leaving the leaked descendant usable. The legitimate failure throws below write
+    // nothing, so suppressing rollback for them is harmless.
+    @Transactional(noRollbackFor = [ResponseStatusException::class])
     fun refresh(refreshToken: String, scopeText: String?): OAuthTokenIssueResult {
         ensureSettings()
         requireSetting("oauth.global")
         val row = tokens.findByRefreshTokenHash(sha256(refreshToken))
             ?: throw ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid refresh token")
-        if (row.revokedAt != null || Instant.now().isAfter(row.refreshExpiresAt ?: row.expiresAt)) {
+        // OAuth 2.0 Security BCP (RFC 9700 §4.14.2) / RFC 6819 §5.2.2.3 refresh-token reuse
+        // detection: each refresh token is single-use and revoked the moment it is rotated
+        // (revokeReason = "refresh_rotated"). Presenting an already-rotated refresh token means
+        // either the legitimate client retried after a lost response OR a leaked token is being
+        // replayed in parallel with the legitimate descendant. We cannot tell the two apart, so
+        // we fail closed AND revoke the whole active token family for that client — invalidating
+        // the attacker's stolen descendant as well. The happy path (a still-active refresh token)
+        // is unaffected.
+        if (row.revokedAt != null) {
+            if (row.revokeReason == "refresh_rotated") {
+                revokeActiveTokenFamily(row.clientId, "refresh_reuse_detected")
+            }
+            throw ResponseStatusException(HttpStatus.UNAUTHORIZED, "Refresh token expired or revoked")
+        }
+        if (Instant.now().isAfter(row.refreshExpiresAt ?: row.expiresAt)) {
             throw ResponseStatusException(HttpStatus.UNAUTHORIZED, "Refresh token expired or revoked")
         }
         val client = clients.findByClientId(row.clientId) ?: throw ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid client")
@@ -245,6 +264,22 @@ class OpenWaveOAuthService(
         row.revokeReason = "refresh_rotated"
         tokens.save(row)
         return issueRotatedToken(client, row, granted)
+    }
+
+    /**
+     * Revokes every still-active token for a client. Used as the fail-closed response to refresh
+     * token reuse: when a rotated (single-use) refresh token is replayed, the entire active token
+     * family is invalidated so a leaked descendant cannot continue to be used.
+     */
+    private fun revokeActiveTokenFamily(clientId: String, reason: String) {
+        val now = Instant.now()
+        val active = tokens.findAllByClientIdAndRevokedAtIsNull(clientId)
+        if (active.isEmpty()) return
+        active.forEach {
+            it.revokedAt = now
+            it.revokeReason = reason
+        }
+        tokens.saveAll(active)
     }
 
     private fun issueRotatedToken(client: OAuthClientEntity, source: OAuthTokenEntity, scopes: Set<String>): OAuthTokenIssueResult {
@@ -382,6 +417,41 @@ class OpenWaveOAuthService(
             OAuthSettingEntity(key = it.first, enabled = it.second)
         }
         if (missing.isNotEmpty()) settings.saveAll(missing)
+    }
+
+    /**
+     * Validates redirect URIs at registration so the stored set is safe for the future
+     * authorization-code flow's REQUIRED exact-string match (RFC 6749 §3.1.2, RFC 9700 §4.1.3):
+     * every entry must be an absolute http(s) URI with a host, no fragment, and no wildcard.
+     * This blocks open-redirect / javascript:/data: / wildcard registrations before they can ever
+     * back a redirect. Duplicates are removed; ordering is otherwise preserved.
+     */
+    internal fun validateRedirectUris(uris: List<String>): List<String> {
+        val seen = LinkedHashSet<String>()
+        for (raw in uris) {
+            val value = raw.trim()
+            if (value.isEmpty()) {
+                throw ResponseStatusException(HttpStatus.BAD_REQUEST, "redirect_uri must not be blank")
+            }
+            if (value.contains("*")) {
+                throw ResponseStatusException(HttpStatus.BAD_REQUEST, "redirect_uri must not contain wildcards: $value")
+            }
+            val parsed = runCatching { URI(value) }.getOrElse {
+                throw ResponseStatusException(HttpStatus.BAD_REQUEST, "redirect_uri is not a valid URI: $value")
+            }
+            val scheme = parsed.scheme?.lowercase()
+            if (scheme != "http" && scheme != "https") {
+                throw ResponseStatusException(HttpStatus.BAD_REQUEST, "redirect_uri must use http or https: $value")
+            }
+            if (!parsed.isAbsolute || parsed.host.isNullOrBlank()) {
+                throw ResponseStatusException(HttpStatus.BAD_REQUEST, "redirect_uri must be an absolute URI with a host: $value")
+            }
+            if (parsed.fragment != null) {
+                throw ResponseStatusException(HttpStatus.BAD_REQUEST, "redirect_uri must not contain a fragment: $value")
+            }
+            seen.add(value)
+        }
+        return seen.toList()
     }
 
     private fun parseScopeText(scopeText: String?): Set<String> =
