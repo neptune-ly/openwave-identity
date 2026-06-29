@@ -41,6 +41,9 @@ class CustomerEmailRequiredException :
 class ForbiddenException(msg: String = "Forbidden") :
     RegistryException("FORBIDDEN", msg, HttpStatus.FORBIDDEN)
 
+class RateLimitExceededException(msg: String = "Too many requests") :
+    RegistryException("RATE_LIMITED", msg, HttpStatus.TOO_MANY_REQUESTS)
+
 data class ErrorResponse(val code: String, val message: String, val details: Any? = null)
 
 @RestControllerAdvice

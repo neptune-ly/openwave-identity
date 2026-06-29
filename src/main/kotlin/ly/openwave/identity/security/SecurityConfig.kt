@@ -22,6 +22,8 @@ import jakarta.servlet.http.HttpServletResponse
 import org.springframework.web.cors.CorsConfiguration
 import org.springframework.web.cors.CorsConfigurationSource
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource
+import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
 
 const val ROLE_ADMIN       = "ROLE_ADMIN"
 const val ROLE_BANK        = "ROLE_BANK"
@@ -68,13 +70,18 @@ class SecurityConfig(
                     "/registry/info",
                     "/.well-known/**",
                     "/oauth/token",
-                    "/oauth/revoke",
-                    "/oauth/introspect",
                     "/oauth/jwks",
                     "/oauth/authorize",
                     "/assets/**",
                     "/actuator/health"
                 ).permitAll()
+                // OAuth introspection (RFC 7662) and revocation (RFC 7009) endpoints.
+                // They are not anonymous: the OAuthController authenticates the caller with
+                // OAuth client credentials (client_id/secret, Basic or form) — a scheme the
+                // Spring role filter does not model — and rejects unauthenticated callers with
+                // 401. They are permitted past the servlet-security filter so that client-credential
+                // auth (rather than ROLE_*) can be enforced in the controller.
+                it.requestMatchers("/oauth/introspect", "/oauth/revoke").permitAll()
                 it.requestMatchers("/oauth/admin/**").hasRole("ADMIN")
                 it.requestMatchers(HttpMethod.GET, "/banks/me").hasRole("BANK")
                 it.requestMatchers(HttpMethod.GET, "/banks", "/banks/*").permitAll()
@@ -145,7 +152,7 @@ class ApiKeyFilter(
                 )
                 SecurityContextHolder.getContext().authentication = auth
             }
-            adminKey != null && adminKey == props.adminKey -> {
+            adminKey != null && constantTimeEquals(adminKey, props.adminKey) -> {
                 val auth = UsernamePasswordAuthenticationToken(
                     "registry-admin", null, listOf(SimpleGrantedAuthority(ROLE_ADMIN))
                 )
@@ -169,3 +176,15 @@ class ApiKeyFilter(
 fun callerBankHandle(): String =
     (SecurityContextHolder.getContext().authentication?.details as? ly.openwave.identity.entity.BankEntity)?.bankHandle
         ?: throw ly.openwave.identity.exception.ForbiddenException()
+
+/**
+ * Constant-time comparison of a presented secret against the configured one.
+ * A blank configured secret never matches (prevents accidental open admin access),
+ * and MessageDigest.isEqual removes the early-exit timing side channel of `==`/equals.
+ */
+internal fun constantTimeEquals(presented: String, configured: String): Boolean {
+    if (configured.isEmpty()) return false
+    val a = presented.toByteArray(StandardCharsets.UTF_8)
+    val b = configured.toByteArray(StandardCharsets.UTF_8)
+    return MessageDigest.isEqual(a, b)
+}

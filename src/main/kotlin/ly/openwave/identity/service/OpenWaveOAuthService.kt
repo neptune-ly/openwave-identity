@@ -191,7 +191,12 @@ class OpenWaveOAuthService(
         if (environment == OAuthEnvironment.LIVE && !client.liveEnabled) {
             throw ResponseStatusException(HttpStatus.FORBIDDEN, "Live OAuth access is disabled for this client")
         }
-        val requested = parseScopeText(scopeText).ifEmpty { parseJsonList(client.allowedScopes).toSet() }
+        // RFC 6749 §3.3: an absent/empty `scope` must NOT be treated as "grant everything".
+        // Require the client to request scopes explicitly; never widen to the full allowed set.
+        val requested = parseScopeText(scopeText)
+        if (requested.isEmpty()) {
+            throw ResponseStatusException(HttpStatus.BAD_REQUEST, "scope is required; empty scope grants no access")
+        }
         val allowed = parseJsonList(client.allowedScopes).toSet()
         val granted = requested.filter { it in allowed }.toSet()
         if (granted.isEmpty()) throw ResponseStatusException(HttpStatus.FORBIDDEN, "No requested scopes are allowed for this client")
@@ -267,10 +272,31 @@ class OpenWaveOAuthService(
         return OAuthTokenIssueResult(accessToken, refreshToken, props.accessTokenTtlSeconds, scopes.joinToString(" "))
     }
 
+    /**
+     * Authenticates the caller as a registered OAuth client (RFC 7662/7009 endpoint protection).
+     * Confidential clients must present a valid secret; public clients authenticate by id alone.
+     * Returns the authenticated client so callers (e.g. revoke) can scope actions to its tokens.
+     */
+    fun authenticateClient(clientId: String?, clientSecret: String?): OAuthClientEntity {
+        if (clientId.isNullOrBlank()) {
+            throw ResponseStatusException(HttpStatus.UNAUTHORIZED, "Client authentication required")
+        }
+        val client = clients.findByClientId(clientId)
+            ?: throw ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid client credentials")
+        validateClientSecret(client, clientSecret)
+        return client
+    }
+
     @Transactional
-    fun revoke(token: String): Map<String, Any?> {
+    fun revoke(token: String, client: OAuthClientEntity? = null): Map<String, Any?> {
         val hash = sha256(token)
         val row = tokens.findByTokenHash(hash) ?: tokens.findByRefreshTokenHash(hash) ?: return mapOf("revoked" to true)
+        // RFC 7009: a client may only revoke tokens it owns. When an authenticated client is
+        // supplied, silently no-op (return success without revoking) for tokens it does not own,
+        // so the endpoint does not become a token-existence oracle for other clients' tokens.
+        if (client != null && row.clientId != client.clientId) {
+            return mapOf("revoked" to true)
+        }
         row.revokedAt = Instant.now()
         row.revokeReason = "token_revoked"
         tokens.save(row)

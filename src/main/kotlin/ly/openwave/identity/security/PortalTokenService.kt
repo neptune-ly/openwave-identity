@@ -3,6 +3,7 @@ package ly.openwave.identity.security
 import ly.openwave.identity.config.RegistryProperties
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
+import java.security.MessageDigest
 import java.security.SecureRandom
 import java.time.Instant
 import java.util.Base64
@@ -51,7 +52,11 @@ class PortalTokenService(private val props: RegistryProperties) {
         if (token.isNullOrBlank() || !token.contains(".")) return null
         val encodedPayload = token.substringBefore(".")
         val signature = token.substringAfter(".")
-        if (sign(encodedPayload) != signature) return null
+        // Constant-time signature comparison to remove the timing side channel of String `!=`,
+        // which would otherwise leak how many leading bytes of a forged signature are correct.
+        val expected = sign(encodedPayload).toByteArray(Charsets.US_ASCII)
+        val presented = signature.toByteArray(Charsets.US_ASCII)
+        if (!MessageDigest.isEqual(expected, presented)) return null
         val parts = String(Base64.getUrlDecoder().decode(encodedPayload)).split("|")
         if (parts.size !in setOf(4, 5)) return null
         val expiresAt = parts.last().toLongOrNull() ?: return null

@@ -74,12 +74,31 @@ class OAuthController(
 
     @PostMapping("/oauth/introspect", consumes = [MediaType.APPLICATION_FORM_URLENCODED_VALUE])
     fun introspect(
+        request: HttpServletRequest,
         @RequestParam token: String,
+        @RequestParam("client_id", required = false) clientIdParam: String?,
+        @RequestParam("client_secret", required = false) clientSecretParam: String?,
         @RequestParam("audience", required = false) audience: String?
-    ): Map<String, Any?> = oauth.introspect(token, audience)
+    ): Map<String, Any?> {
+        val basic = basicClientCredentials(request)
+        // RFC 7662 §2.1: the introspection endpoint MUST require authentication.
+        oauth.authenticateClient(basic?.first ?: clientIdParam, basic?.second ?: clientSecretParam)
+        return oauth.introspect(token, audience)
+    }
 
     @PostMapping("/oauth/revoke", consumes = [MediaType.APPLICATION_FORM_URLENCODED_VALUE])
-    fun revoke(@RequestParam token: String): Map<String, Any?> = oauth.revoke(token)
+    fun revoke(
+        request: HttpServletRequest,
+        @RequestParam token: String,
+        @RequestParam("client_id", required = false) clientIdParam: String?,
+        @RequestParam("client_secret", required = false) clientSecretParam: String?
+    ): Map<String, Any?> {
+        val basic = basicClientCredentials(request)
+        // RFC 7009 §2.1: the revocation endpoint MUST require client authentication,
+        // and a client may only revoke its own tokens.
+        val client = oauth.authenticateClient(basic?.first ?: clientIdParam, basic?.second ?: clientSecretParam)
+        return oauth.revoke(token, client)
+    }
 
     @GetMapping("/oauth/admin/settings")
     fun settings(): Map<String, Any?> = oauth.settings()

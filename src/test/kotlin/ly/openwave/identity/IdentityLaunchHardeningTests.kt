@@ -195,7 +195,7 @@ class IdentityLaunchHardeningTests {
         mockMvc.perform(get("/identity/resolve").queryParam("alias", "default-user"))
             .andExpect(status().isOk)
             .andExpect(jsonPath("$.bankHandle").value("default-a"))
-            .andExpect(jsonPath("$.iban").value("LY66666666666666666661"))
+            .andExpect(jsonPath("$.iban").value("****6661"))
             .andExpect(jsonPath("$.isDefault").value(true))
     }
 
@@ -206,11 +206,12 @@ class IdentityLaunchHardeningTests {
         claim(bankA, "routing-user", "LY88888888888888888881", displayName = "Routing Customer", nationalId = "100000000005", phone = "+218910000005")
         claim(bankB, "routing-user", "LY99999999999999999991", displayName = "Ignored Name", setAsDefault = false, nationalId = "100000000005", phone = "+218910000005")
 
+        // Anonymous (public) callers receive a last-4 masked IBAN, never the full account number.
         val response = mockMvc.perform(get("/identity/resolve").queryParam("alias", "routing-user@resolve-b"))
             .andExpect(status().isOk)
             .andExpect(jsonPath("$.nptHandle").value("routing-user"))
             .andExpect(jsonPath("$.bankHandle").value("resolve-b"))
-            .andExpect(jsonPath("$.iban").value("LY99999999999999999991"))
+            .andExpect(jsonPath("$.iban").value("****9991"))
             .andExpect(jsonPath("$.displayName").value("Routing Customer"))
             .andReturn()
             .response
@@ -219,6 +220,8 @@ class IdentityLaunchHardeningTests {
         val fields = objectMapper.readTree(response).fieldNames().asSequence().toSet()
         assertThat(fields).containsExactlyInAnyOrder("nptHandle", "bankHandle", "iban", "displayName", "isDefault", "resolvedAt")
         assertThat(response).doesNotContain("nationalId", "phone", "bankCustomerRef", "accounts", "linkedBanks")
+        // The full unmasked IBAN must not leak to anonymous callers.
+        assertThat(response).doesNotContain("LY99999999999999999991")
     }
 
     @Test
