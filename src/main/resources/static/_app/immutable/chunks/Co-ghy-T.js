@@ -1,1 +1,0 @@
-import{pt as e}from"./D35JaiPh.js";e();

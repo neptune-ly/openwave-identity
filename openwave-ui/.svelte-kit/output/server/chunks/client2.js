@@ -48,4 +48,4 @@ async function apiPublic(path) {
 	}
 }
 //#endregion
-export { apiPublic as n, apiCall as t };
+export { apiPublic as n, getApi as r, apiCall as t };

@@ -1,26 +1,6 @@
 import { V as writable, z as get } from "./index-server.js";
 import "./index-server2.js";
-//#region src/lib/config.js
-var envUrl = void 0;
-function normalizeUrl(value) {
-	if (!value || typeof value !== "string") return null;
-	const trimmed = value.trim().replace(/\/+$/, "");
-	if (!trimmed) return null;
-	if (trimmed.startsWith("/")) return trimmed;
-	try {
-		return new URL(trimmed).toString().replace(/\/+$/, "");
-	} catch {
-		return null;
-	}
-}
-function configuredRegistryUrl() {
-	return normalizeUrl(typeof window !== "undefined" ? window.OPENWAVE_REGISTRY_URL : null) || normalizeUrl(envUrl) || "/v1";
-}
-function savedRegistryUrl() {
-	if (typeof localStorage === "undefined") return configuredRegistryUrl();
-	return normalizeUrl(localStorage.getItem("ow_registry_url_override")) || configuredRegistryUrl();
-}
-//#endregion
+import { t as configuredRegistryUrl } from "./config.js";
 //#region src/lib/stores/auth.js
 var STORAGE_KEY = "ow_session";
 var isBrowser = typeof window !== "undefined" && typeof localStorage !== "undefined";
@@ -66,6 +46,17 @@ function createAuthStore() {
 			set(s);
 			saveSession(s);
 		},
+		loginCustomer(baseUrl, username, sessionToken = null, portalRole = "CUSTOMER") {
+			const s = {
+				role: "CUSTOMER",
+				portalRole,
+				username,
+				sessionToken,
+				baseUrl: baseUrl || configuredRegistryUrl()
+			};
+			set(s);
+			saveSession(s);
+		},
 		logout() {
 			set(null);
 			saveSession(null);
@@ -77,4 +68,4 @@ function createAuthStore() {
 }
 var auth = createAuthStore();
 //#endregion
-export { configuredRegistryUrl as n, savedRegistryUrl as r, auth as t };
+export { auth as t };

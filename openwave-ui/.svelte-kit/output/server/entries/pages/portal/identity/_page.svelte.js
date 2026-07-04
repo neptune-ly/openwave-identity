@@ -1,90 +1,91 @@
-import { b as stringify, et as attr, f as ensure_array_like, nt as escape_html, o as attr_class, p as head, u as derived } from "../../../../chunks/index-server.js";
+import { et as attr, f as ensure_array_like, nt as escape_html, o as attr_class, p as head, u as derived } from "../../../../chunks/index-server.js";
 import "../../../../chunks/index-server2.js";
+import "../../../../chunks/client.js";
+import "../../../../chunks/state.js";
+import "../../../../chunks/navigation.js";
 import "../../../../chunks/auth.js";
-import "../../../../chunks/client2.js";
+import { t as Building_2 } from "../../../../chunks/building-2.js";
+import { t as Clipboard_list } from "../../../../chunks/clipboard-list.js";
+import { t as Route } from "../../../../chunks/route.js";
+import { t as Info } from "../../../../chunks/info.js";
+import { t as Arrow_right } from "../../../../chunks/arrow-right.js";
+import { t as Refresh_cw } from "../../../../chunks/refresh-cw.js";
+import { t as User_plus } from "../../../../chunks/user-plus.js";
+import { n as Link_2, t as Unlink_2 } from "../../../../chunks/unlink-2.js";
 //#region src/routes/portal/identity/+page.svelte
 function _page($$renderer, $$props) {
 	$$renderer.component(($$renderer) => {
 		let session = null;
-		let banks = [];
-		let enroll = {
-			nptHandle: "",
-			iban: "",
-			customerDisplayName: "",
-			bankCustomerRef: "",
-			setAsDefault: true
-		};
-		let linkHandle = "";
-		let linkIban = "";
-		let linkDefault = false;
-		let unlinkHandle = "";
-		let unlinkIban = "";
-		let defHandle = "";
-		let defIban = "";
-		let defBankHandle = "";
-		let defBankSelected = "";
+		const actionCards = [
+			{
+				key: "claim",
+				title: "Claim handle",
+				description: "Create a customer identity and establish the first bank-backed account route.",
+				icon: User_plus,
+				tone: "text-indigo-300"
+			},
+			{
+				key: "link",
+				title: "Link account",
+				description: "Attach another IBAN for the same customer identity within the current bank scope.",
+				icon: Link_2,
+				tone: "text-emerald-300"
+			},
+			{
+				key: "unlink",
+				title: "Unlink account",
+				description: "Remove an outdated or invalid route from the selected customer alias.",
+				icon: Unlink_2,
+				tone: "text-rose-300"
+			},
+			{
+				key: "default-account",
+				title: "Default IBAN",
+				description: "Choose which IBAN resolves when the payer selects a bank-specific alias.",
+				icon: Route,
+				tone: "text-amber-300"
+			},
+			{
+				key: "default-bank",
+				title: "Default bank",
+				description: "Set which bank answers a bare NPT handle without an explicit bank suffix.",
+				icon: Building_2,
+				tone: "text-sky-300"
+			}
+		];
 		const isBank = derived(() => session?.role === "BANK");
+		function hintClass() {
+			return "inline-flex h-4 w-4 cursor-help text-white/40";
+		}
 		head("uqsks6", $$renderer, ($$renderer) => {
 			$$renderer.title(($$renderer) => {
-				$$renderer.push(`<title>Identity — OpenWave</title>`);
+				$$renderer.push(`<title>Identity Operations - OpenWave Identity</title>`);
 			});
 		});
-		$$renderer.push(`<div class="p-8 max-w-4xl mx-auto space-y-5"><div class="mb-8"><h1 class="text-2xl font-semibold tracking-tight">Identity</h1> <p class="text-white/40 text-sm mt-1">`);
-		if (isBank()) {
-			$$renderer.push("<!--[0-->");
-			$$renderer.push(`Claim handles and manage your bank's linked accounts`);
-		} else {
-			$$renderer.push("<!--[-1-->");
-			$$renderer.push(`Manage all identity handles and linked accounts`);
-		}
-		$$renderer.push(`<!--]--></p></div> <section class="rounded-2xl bg-white/[0.03] border border-white/[0.07] p-6"><div class="flex items-start justify-between mb-5"><div><div class="text-sm font-semibold">Claim NPT Handle</div> <div class="text-[12px] text-white/30 mt-0.5">Bank vouches for the customer's identity</div></div> <div${attr_class(`px-2.5 py-1 rounded-lg border text-[11px] ${stringify(isBank() ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400" : "bg-amber-500/10 border-amber-500/20 text-amber-400")}`)}>${escape_html(isBank() ? "Bank Access Active" : "Admin Mode")}</div></div> <div class="grid grid-cols-2 gap-3"><!--[-->`);
-		const each_array = ensure_array_like([
-			[
-				"nptHandle",
-				"NPT Handle",
-				"e.g. mtellesy"
-			],
-			[
-				"customerDisplayName",
-				"Display Name",
-				"Full name"
-			],
-			[
-				"iban",
-				"IBAN",
-				"LY83002700…"
-			],
-			[
-				"bankCustomerRef",
-				"Customer Ref",
-				"Internal bank ID"
-			]
-		]);
+		$$renderer.push(`<div class="p-8 max-w-7xl mx-auto space-y-6"><section class="identity-expressive-band p-6"><div class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between"><div class="max-w-3xl"><p class="text-[11px] uppercase tracking-[0.18em] text-white/30">${escape_html(isBank() ? "Bank identity desk" : "Registry identity desk")}</p> <h1 class="identity-page-title mt-2 text-3xl font-semibold tracking-tight">Identity Operations</h1> <p class="identity-section-note mt-2 text-sm text-white/55">Keep this page focused on choosing the right workflow. Open a dedicated route desk for claim, linking, routing, or removal instead of stacking every operator action into one screen.</p> <div class="mt-3 flex flex-wrap gap-2 text-xs text-white/45"><span class="identity-role-accent">Dedicated flow desks <span class="tooltip max-w-xs" data-tip="Each identity workflow now has its own route so operators can deep-link into one task at a time instead of sharing one overloaded page.">`);
+		Info($$renderer, { class: hintClass() });
+		$$renderer.push(`<!----></span></span> <span class="identity-role-accent">Bank-vouched routing</span> <span class="identity-role-accent">Preflight-first actions</span></div></div> <div class="flex flex-wrap gap-2"><a href="/portal/reports" class="identity-shell-button inline-flex items-center gap-2 rounded-xl border px-4 py-2 text-[13px] font-medium transition-all hover:text-white">`);
+		Clipboard_list($$renderer, { class: "w-4 h-4" });
+		$$renderer.push(`<!----> Reports</a> <a href="/portal/identity/claim" class="identity-shell-button inline-flex items-center gap-2 rounded-xl border px-4 py-2 text-[13px] font-medium transition-all hover:text-white">`);
+		Refresh_cw($$renderer, { class: "w-4 h-4" });
+		$$renderer.push(`<!----> Start claim</a></div></div> <div class="mt-4 grid gap-3 md:grid-cols-3"><div class="identity-surface-soft px-4 py-3"><div class="text-[11px] uppercase tracking-[0.16em] text-white/30">Operator scope</div> <div class="mt-2 text-lg font-semibold text-white">${escape_html(isBank() ? session?.bankHandle || "Bank scope" : "Global registry")}</div> <div class="mt-1 text-[12px] text-white/45">${escape_html(isBank() ? "Write actions remain bank-scoped unless the flow explicitly says otherwise." : "Admin actions can correct routing across the full registry.")}</div></div> <div class="identity-surface-soft px-4 py-3"><div class="text-[11px] uppercase tracking-[0.16em] text-white/30">Workflow count</div> <div class="mt-2 text-lg font-semibold text-white">${escape_html(actionCards.length)} focused desks</div> <div class="mt-1 text-[12px] text-white/45">Each route owns one identity change instead of combining every action on one page.</div></div> <div class="identity-surface-soft px-4 py-3"><div class="text-[11px] uppercase tracking-[0.16em] text-white/30">Primary job</div> <div class="mt-2 text-lg font-semibold text-white">Choose one flow, then operate</div> <div class="mt-1 text-[12px] text-white/45">Discovery stays here; form work, preflight, and result context move to the dedicated flow page.</div></div></div></section> <section class="identity-surface-card p-6"><div class="flex flex-col gap-2 lg:flex-row lg:items-end lg:justify-between"><div><p class="text-[11px] uppercase tracking-[0.18em] text-white/30">Identity workflows</p> <h2 class="mt-2 text-lg font-semibold text-white">Open one focused desk at a time.</h2> <p class="mt-2 max-w-3xl text-sm text-white/45">Claims, route linking, unlinking, default-account changes, and default-bank changes have different risk. They should not compete for attention on one page.</p></div> <div class="identity-role-accent">No mixed workflow page</div></div> <div class="mt-5 grid gap-3 lg:grid-cols-2 xl:grid-cols-3"><!--[-->`);
+		const each_array = ensure_array_like(actionCards);
 		for (let $$index = 0, $$length = each_array.length; $$index < $$length; $$index++) {
-			let [field, label, ph] = each_array[$$index];
-			$$renderer.push(`<div><label class="block text-[11px] text-white/35 mb-1.5 uppercase tracking-wider">${escape_html(label)}</label> <input${attr("value", enroll[field])}${attr("placeholder", ph)} class="w-full bg-white/[0.05] border border-white/[0.1] rounded-xl px-3.5 py-2.5 text-[13px] text-white font-mono placeholder-white/20 focus:outline-none focus:border-indigo-500/60 transition-all"/></div>`);
-		}
-		$$renderer.push(`<!--]--> <div class="col-span-2 flex items-center gap-2.5"><input type="checkbox"${attr("checked", enroll.setAsDefault, true)} id="sd" class="w-4 h-4 accent-indigo-500"/> <label for="sd" class="text-[13px] text-white/40">Set as default bank for this handle</label></div></div> `);
-		$$renderer.push("<!--[-1-->");
-		$$renderer.push(`<!--]--> <button${attr("disabled", !enroll.nptHandle || !enroll.iban, true)} class="mt-4 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-30 text-white text-[13px] font-semibold rounded-xl transition-all">${escape_html("Claim Handle")}</button></section> <section class="rounded-2xl bg-white/[0.03] border border-white/[0.07] p-6"><div class="text-sm font-semibold mb-1">Link Additional IBAN</div> <div class="text-[12px] text-white/30 mb-4">Add another account to an existing identity</div> <div class="grid grid-cols-3 gap-3 items-end"><div><label class="block text-[11px] text-white/35 mb-1.5 uppercase tracking-wider">NPT Handle</label> <input${attr("value", linkHandle)} placeholder="mtellesy" class="w-full bg-white/[0.05] border border-white/[0.1] rounded-xl px-3.5 py-2.5 text-[13px] text-white font-mono placeholder-white/20 focus:outline-none focus:border-indigo-500/60 transition-all"/></div> <div><label class="block text-[11px] text-white/35 mb-1.5 uppercase tracking-wider">IBAN</label> <input${attr("value", linkIban)} placeholder="LY92010500…" class="w-full bg-white/[0.05] border border-white/[0.1] rounded-xl px-3.5 py-2.5 text-[13px] text-white font-mono placeholder-white/20 focus:outline-none focus:border-indigo-500/60 transition-all"/></div> <div class="space-y-2"><div class="flex items-center gap-2"><input type="checkbox"${attr("checked", linkDefault, true)} id="ld" class="w-4 h-4 accent-indigo-500"/> <label for="ld" class="text-[12px] text-white/35">Set as default</label></div> <button${attr("disabled", true, true)} class="w-full px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-30 text-white text-[13px] font-semibold rounded-xl transition-all">${escape_html("Link IBAN")}</button></div></div></section> <section class="rounded-2xl bg-white/[0.03] border border-white/[0.07] p-6"><div class="text-sm font-semibold mb-1">Unlink IBAN</div> <div class="text-[12px] text-white/30 mb-4">Remove an account from an identity</div> <div class="grid grid-cols-3 gap-3 items-end"><div><label class="block text-[11px] text-white/35 mb-1.5 uppercase tracking-wider">NPT Handle</label> <input${attr("value", unlinkHandle)} placeholder="mtellesy" class="w-full bg-white/[0.05] border border-white/[0.1] rounded-xl px-3.5 py-2.5 text-[13px] text-white font-mono placeholder-white/20 focus:outline-none focus:border-red-500/60 transition-all"/></div> <div><label class="block text-[11px] text-white/35 mb-1.5 uppercase tracking-wider">IBAN</label> <input${attr("value", unlinkIban)} placeholder="LY83002700…" class="w-full bg-white/[0.05] border border-white/[0.1] rounded-xl px-3.5 py-2.5 text-[13px] text-white font-mono placeholder-white/20 focus:outline-none focus:border-red-500/60 transition-all"/></div> <button${attr("disabled", true, true)} class="px-4 py-2.5 bg-red-600/70 hover:bg-red-600 disabled:opacity-30 text-white text-[13px] font-semibold rounded-xl transition-all">${escape_html("Unlink")}</button></div></section> <section class="rounded-2xl bg-white/[0.03] border border-white/[0.07] p-6"><div class="text-sm font-semibold mb-1">Set Default IBAN</div> <div class="text-[12px] text-white/30 mb-4">Which IBAN resolves for <code class="text-white/40">handle@bank</code></div> <div class="grid grid-cols-3 gap-3 items-end"><div><label class="block text-[11px] text-white/35 mb-1.5 uppercase tracking-wider">NPT Handle</label> <input${attr("value", defHandle)} placeholder="mtellesy" class="w-full bg-white/[0.05] border border-white/[0.1] rounded-xl px-3.5 py-2.5 text-[13px] text-white font-mono placeholder-white/20 focus:outline-none focus:border-indigo-500/60 transition-all"/></div> <div><label class="block text-[11px] text-white/35 mb-1.5 uppercase tracking-wider">IBAN</label> <input${attr("value", defIban)} placeholder="LY83002700…" class="w-full bg-white/[0.05] border border-white/[0.1] rounded-xl px-3.5 py-2.5 text-[13px] text-white font-mono placeholder-white/20 focus:outline-none focus:border-indigo-500/60 transition-all"/></div> <button${attr("disabled", true, true)} class="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-30 text-white text-[13px] font-semibold rounded-xl transition-all">${escape_html("Set Default")}</button></div></section> <section class="rounded-2xl bg-white/[0.03] border border-white/[0.07] p-6"><div class="text-sm font-semibold mb-1">Set Default Bank</div> <div class="text-[12px] text-white/30 mb-4">Which bank resolves for bare <code class="text-white/40">handle</code></div> <div class="grid grid-cols-3 gap-3 items-end"><div><label class="block text-[11px] text-white/35 mb-1.5 uppercase tracking-wider">NPT Handle</label> <input${attr("value", defBankHandle)} placeholder="mtellesy" class="w-full bg-white/[0.05] border border-white/[0.1] rounded-xl px-3.5 py-2.5 text-[13px] text-white font-mono placeholder-white/20 focus:outline-none focus:border-indigo-500/60 transition-all"/></div> <div><label class="block text-[11px] text-white/35 mb-1.5 uppercase tracking-wider">Bank</label> `);
-		$$renderer.select({
-			value: defBankSelected,
-			class: "w-full bg-[#0d0d18] border border-white/[0.1] rounded-xl px-3.5 py-2.5 text-[13px] text-white focus:outline-none focus:border-indigo-500/60 transition-all"
-		}, ($$renderer) => {
-			$$renderer.option({ value: "" }, ($$renderer) => {
-				$$renderer.push(`Select bank`);
-			});
-			$$renderer.push(`<!--[-->`);
-			const each_array_2 = ensure_array_like(banks);
-			for (let $$index_2 = 0, $$length = each_array_2.length; $$index_2 < $$length; $$index_2++) {
-				let b = each_array_2[$$index_2];
-				$$renderer.option({ value: b.bankHandle }, ($$renderer) => {
-					$$renderer.push(`${escape_html(b.displayName || b.bankHandle)}`);
-				});
+			let card = each_array[$$index];
+			$$renderer.push(`<a${attr("href", `/portal/identity/${card.key}`)} class="identity-workspace-card p-5 transition-all hover:bg-white/[0.045]"><div class="flex items-start justify-between gap-3"><div${attr_class(`flex h-11 w-11 items-center justify-center rounded-2xl border border-white/[0.08] bg-white/[0.04] ${card.tone}`)}>`);
+			if (card.icon) {
+				$$renderer.push("<!--[-->");
+				card.icon($$renderer, { class: "h-5 w-5" });
+				$$renderer.push("<!--]-->");
+			} else {
+				$$renderer.push("<!--[!-->");
+				$$renderer.push("<!--]-->");
 			}
-			$$renderer.push(`<!--]-->`);
-		});
-		$$renderer.push(`</div> <button${attr("disabled", true, true)} class="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-30 text-white text-[13px] font-semibold rounded-xl transition-all">${escape_html("Set Default")}</button></div></section></div>`);
+			$$renderer.push(`</div> `);
+			Arrow_right($$renderer, { class: "mt-1 h-4 w-4 text-white/30" });
+			$$renderer.push(`<!----></div> <div class="mt-4 text-sm font-semibold text-white">${escape_html(card.title)}</div> <div class="mt-2 text-[13px] leading-5 text-white/45">${escape_html(card.description)}</div></a>`);
+		}
+		$$renderer.push(`<!--]--></div></section></div>`);
 	});
 }
 //#endregion
