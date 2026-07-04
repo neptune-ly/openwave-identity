@@ -45,9 +45,11 @@ class OpenWaveOAuthService(
     private val authorizationRequestCleanupCooldownMs = 60_000L
     private val pkceCodeChallengeS256Pattern = Regex("^[A-Za-z0-9_-]{43}$")
     private val pkceVerifierPattern = Regex("^[A-Za-z0-9\\-._~]{43,128}$")
-    private val accessTokenPattern = Regex("^owat_[A-Za-z0-9_-]+$")
-    private val refreshTokenPattern = Regex("^owrt_[A-Za-z0-9_-]+$")
-    private val authorizationCodePattern = Regex("^owac_[A-Za-z0-9_-]+$")
+    private val opaqueTokenBodyLength = 54 // Base64url without padding for 40 random bytes.
+    private val authorizationCodeBodyLength = 43 // Base64url without padding for 32 random bytes.
+    private val accessTokenPattern = Regex("^owat_[A-Za-z0-9_-]{$opaqueTokenBodyLength}$")
+    private val refreshTokenPattern = Regex("^owrt_[A-Za-z0-9_-]{$opaqueTokenBodyLength}$")
+    private val authorizationCodePattern = Regex("^owac_[A-Za-z0-9_-]{$authorizationCodeBodyLength}$")
     private val maxClientIdLength = 80
     private val maxClientSecretLength = 512
     private val maxRequestIdLength = 200
