@@ -50,6 +50,7 @@ oauth:
   issuer: ${OPENWAVE_OAUTH_ISSUER:${IDENTITY_PORTAL_URL:https://identity.neptune.ly}/v1}
   access-token-ttl-seconds: ${OPENWAVE_OAUTH_ACCESS_TOKEN_TTL_SECONDS:900}
   refresh-token-ttl-seconds: ${OPENWAVE_OAUTH_REFRESH_TOKEN_TTL_SECONDS:2592000}
+  authorization-rate-limit-per-minute: ${OPENWAVE_OAUTH_AUTHORIZATION_RATE_LIMIT_PER_MINUTE:60}
 
 identity:
   assets:

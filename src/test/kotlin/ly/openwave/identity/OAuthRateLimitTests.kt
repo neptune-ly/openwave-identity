@@ -6,6 +6,7 @@ import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMock
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.http.MediaType
 import org.springframework.test.web.servlet.MockMvc
+import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
@@ -20,6 +21,7 @@ import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
         "spring.jpa.properties.hibernate.dialect=org.hibernate.dialect.H2Dialect",
         "spring.flyway.enabled=false",
         "registry.admin-key=test-admin-key",
+        "oauth.authorization-rate-limit-per-minute=1",
         "oauth.token-rate-limit-per-minute=1",
         "oauth.introspection-rate-limit-per-minute=1",
         "oauth.revocation-rate-limit-per-minute=1",
@@ -165,6 +167,34 @@ class OAuthRateLimitTests {
                 .param("token", "owat_test")
                 .param("client_id", "owc_rotating_six")
                 .param("client_secret", "invalid-secret")
+        ).andExpect(status().isTooManyRequests)
+            .andExpect(jsonPath("$.code").value("RATE_LIMITED"))
+    }
+
+    @Test
+    fun `oauth authorization rate limit is not bypassed by rotating client ids`() {
+        val ip = "203.0.113.69"
+
+        mockMvc.perform(
+            get("/oauth/authorize")
+                .header("X-Forwarded-For", ip)
+                .queryParam("client_id", "owc_authorize_one")
+                .queryParam("redirect_uri", "https://client.example.test/callback")
+                .queryParam("response_type", "code")
+                .queryParam("scope", "openwave:owner.ops.read")
+                .queryParam("code_challenge", "X5F6V8fA1xNfW3aZ2M0x8Wf4rL8j7vR6Qw3bV7u8x4Y")
+                .queryParam("code_challenge_method", "S256")
+        ).andExpect(status().is4xxClientError)
+
+        mockMvc.perform(
+            get("/oauth/authorize")
+                .header("X-Forwarded-For", ip)
+                .queryParam("client_id", "owc_authorize_two")
+                .queryParam("redirect_uri", "https://client.example.test/callback")
+                .queryParam("response_type", "code")
+                .queryParam("scope", "openwave:owner.ops.read")
+                .queryParam("code_challenge", "X5F6V8fA1xNfW3aZ2M0x8Wf4rL8j7vR6Qw3bV7u8x4Y")
+                .queryParam("code_challenge_method", "S256")
         ).andExpect(status().isTooManyRequests)
             .andExpect(jsonPath("$.code").value("RATE_LIMITED"))
     }

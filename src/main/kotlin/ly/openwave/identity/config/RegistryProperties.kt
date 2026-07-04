@@ -26,6 +26,7 @@ class OAuthProperties {
     var issuer: String = "https://identity.neptune.ly/v1"
     var accessTokenTtlSeconds: Long = 900
     var refreshTokenTtlSeconds: Long = 2_592_000
+    var authorizationRateLimitPerMinute: Int = 60
     var tokenRateLimitPerMinute: Int = 120
     var introspectionRateLimitPerMinute: Int = 600
     var revocationRateLimitPerMinute: Int = 120

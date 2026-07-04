@@ -20,9 +20,11 @@ class OAuthController(
     private val oauth: OpenWaveOAuthService,
     private val props: OAuthProperties
 ) {
+    private val authorizationIpWindow = RateLimiter(windowMillis = 60_000, maxEntries = props.rateLimitMaxEntries)
     private val tokenIpWindow = RateLimiter(windowMillis = 60_000, maxEntries = props.rateLimitMaxEntries)
     private val introspectionIpWindow = RateLimiter(windowMillis = 60_000, maxEntries = props.rateLimitMaxEntries)
     private val revocationIpWindow = RateLimiter(windowMillis = 60_000, maxEntries = props.rateLimitMaxEntries)
+    private val authorizationWindow = RateLimiter(windowMillis = 60_000, maxEntries = props.rateLimitMaxEntries)
     private val tokenWindow = RateLimiter(windowMillis = 60_000, maxEntries = props.rateLimitMaxEntries)
     private val introspectionWindow = RateLimiter(windowMillis = 60_000, maxEntries = props.rateLimitMaxEntries)
     private val revocationWindow = RateLimiter(windowMillis = 60_000, maxEntries = props.rateLimitMaxEntries)
@@ -40,6 +42,7 @@ class OAuthController(
 
     @GetMapping("/oauth/authorize")
     fun authorize(
+        request: HttpServletRequest,
         @RequestParam("client_id") clientId: String,
         @RequestParam("redirect_uri") redirectUri: String,
         @RequestParam("response_type") responseType: String,
@@ -50,6 +53,8 @@ class OAuthController(
         @RequestParam("audience", required = false) audience: String?,
         @RequestParam("environment", required = false) environment: String?
     ): ResponseEntity<Any> {
+        enforceOAuthIpRateLimit(request, authorizationIpWindow, "authorize", props.authorizationRateLimitPerMinute)
+        enforceOAuthRateLimit(request, authorizationWindow, "authorize", clientId, props.authorizationRateLimitPerMinute)
         val created = oauth.createAuthorizationRequest(
             clientId = clientId,
             redirectUri = redirectUri,
