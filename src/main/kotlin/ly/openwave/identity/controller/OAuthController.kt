@@ -215,7 +215,12 @@ class OAuthController(
     private fun basicClientCredentials(request: HttpServletRequest): Pair<String, String>? {
         val header = request.getHeader("Authorization") ?: return null
         if (!header.startsWith("Basic ", ignoreCase = true)) return null
-        val decoded = String(Base64.getDecoder().decode(header.substringAfter(" ")), StandardCharsets.UTF_8)
+        if (header.length > 4096) return null
+        val decoded = try {
+            String(Base64.getDecoder().decode(header.substringAfter(" ").trim()), StandardCharsets.UTF_8)
+        } catch (ex: IllegalArgumentException) {
+            return null
+        }
         val index = decoded.indexOf(':')
         if (index <= 0) return null
         return decoded.substring(0, index) to decoded.substring(index + 1)

@@ -117,6 +117,74 @@ class OAuthAndResolveSecurityTests {
     }
 
     @Test
+    fun `malformed basic authorization header does not leak internals`() {
+        val secret = createConfidentialClient(scopes = listOf("identity:registry.read"))
+        val accessToken = issueToken(secret, "identity:registry.read")
+
+        // Bad base64 should produce a 401 without a 500 from Base64 decoding.
+        mockMvc.perform(
+            post("/oauth/introspect")
+                .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                .header("Authorization", "Basic ???")
+                .param("token", accessToken)
+        ).andExpect(status().isUnauthorized)
+
+        // Decoded header without a colon should also be rejected as unauthorized.
+        mockMvc.perform(
+            post("/oauth/introspect")
+                .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                .header("Authorization", basicAuthHeader("owc_test_client"))
+                .param("token", accessToken)
+        ).andExpect(status().isUnauthorized)
+
+        // Extremely large headers must be rejected safely without decode work.
+        mockMvc.perform(
+            post("/oauth/introspect")
+                .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                .header("Authorization", "Basic ${"A".repeat(8192)}")
+                .param("token", accessToken)
+        ).andExpect(status().isUnauthorized)
+    }
+
+    @Test
+    fun `authorization code rejects oversized or malformed code challenge`() {
+        createConfidentialClient(
+            scopes = listOf("openwave:owner.ops.read"),
+            redirectUris = listOf("https://client.example.test/callback")
+        )
+        val oversizedChallenge = "a".repeat(161)
+        mockMvc.perform(
+            get("/oauth/authorize")
+                .queryParam("client_id", CLIENT_ID)
+                .queryParam("redirect_uri", "https://client.example.test/callback")
+                .queryParam("response_type", "code")
+                .queryParam("scope", "openwave:owner.ops.read")
+                .queryParam("code_challenge", oversizedChallenge)
+                .queryParam("code_challenge_method", "S256")
+        ).andExpect(status().isBadRequest)
+
+        mockMvc.perform(
+            get("/oauth/authorize")
+                .queryParam("client_id", CLIENT_ID)
+                .queryParam("redirect_uri", "https://client.example.test/callback")
+                .queryParam("response_type", "code")
+                .queryParam("scope", "openwave:owner.ops.read")
+                .queryParam("code_challenge", "not-valid$$$")
+                .queryParam("code_challenge_method", "S256")
+        ).andExpect(status().isBadRequest)
+
+        mockMvc.perform(
+            get("/oauth/authorize")
+                .queryParam("client_id", CLIENT_ID)
+                .queryParam("redirect_uri", "https://client.example.test/callback")
+                .queryParam("response_type", "code")
+                .queryParam("scope", "openwave:owner.ops.read")
+                .queryParam("code_challenge", "X5F6V8fA1xNfW3aZ2M0x8Wf4rL8j7vR6Qw3bV7u8x4Y")
+                .queryParam("code_challenge_method", " S256 ")
+        ).andExpect(status().isFound)
+    }
+
+    @Test
     fun `revoke requires client authentication`() {
         val secret = createConfidentialClient(scopes = listOf("identity:registry.read"))
         val accessToken = issueToken(secret, "identity:registry.read")
@@ -606,6 +674,9 @@ class OAuthAndResolveSecurityTests {
             ?.second
             ?: error("No $key in $url")
     }
+
+    private fun basicAuthHeader(clientId: String, clientSecret: String = ""): String =
+        "Basic ${Base64.getEncoder().encodeToString("$clientId:$clientSecret".toByteArray())}"
 
     private fun MockHttpServletRequestBuilder.bankKey(apiKey: String) =
         header("X-OpenWave-Bank-Key", apiKey)

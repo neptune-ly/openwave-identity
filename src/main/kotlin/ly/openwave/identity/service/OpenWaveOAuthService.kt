@@ -43,6 +43,8 @@ class OpenWaveOAuthService(
     private val json = jacksonObjectMapper()
     private val nextAuthorizationRequestCleanupMs = AtomicLong(0)
     private val authorizationRequestCleanupCooldownMs = 60_000L
+    private val pkceCodeChallengeS256Pattern = Regex("^[A-Za-z0-9_-]{43}$")
+    private val pkceVerifierPattern = Regex("^[A-Za-z0-9\\-._~]{43,128}$")
 
     private val knownSettings = listOf(
         "oauth.global" to false,
@@ -130,10 +132,13 @@ class OpenWaveOAuthService(
         requireSetting("oauth.global")
         purgeExpiredAuthorizationRequests()
         if (responseType != "code") throw ResponseStatusException(HttpStatus.BAD_REQUEST, "response_type must be code")
-        if ((codeChallengeMethod ?: "S256") != "S256") {
+        if ((codeChallengeMethod ?: "S256").trim() != "S256") {
             throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Only PKCE S256 is supported")
         }
         if (codeChallenge.isBlank()) throw ResponseStatusException(HttpStatus.BAD_REQUEST, "code_challenge is required")
+        if (!pkceCodeChallengeS256Pattern.matches(codeChallenge)) {
+            throw ResponseStatusException(HttpStatus.BAD_REQUEST, "code_challenge is invalid")
+        }
         val client = clients.findByClientId(clientId) ?: throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Unknown OAuth client")
         validateClientOperationalGates(client, environmentText)
         val redirects = parseJsonList(client.redirectUris)
@@ -860,8 +865,8 @@ class OpenWaveOAuthService(
             "openwave:tokens.introspect" in parseJsonList(client.allowedScopes)
 
     private fun pkceS256Matches(verifier: String, challenge: String): Boolean {
-        val value = verifier.trim()
-        if (value.length !in 43..128) return false
+        if (!pkceVerifierPattern.matches(verifier)) return false
+        val value = verifier
         val digest = MessageDigest.getInstance("SHA-256").digest(value.toByteArray())
         val computed = Base64.getUrlEncoder().withoutPadding().encodeToString(digest)
         return MessageDigest.isEqual(computed.toByteArray(), challenge.toByteArray())
