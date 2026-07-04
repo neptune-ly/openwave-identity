@@ -10,12 +10,14 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import org.springframework.web.server.ResponseStatusException
+import org.slf4j.LoggerFactory
 import java.net.URI
 import java.net.URLEncoder
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.time.Instant
 import java.util.Base64
+import java.util.concurrent.atomic.AtomicLong
 
 data class OAuthTokenIssueResult(
     val accessToken: String,
@@ -35,9 +37,12 @@ class OpenWaveOAuthService(
     private val authorizationRequests: OAuthAuthorizationRequestRepository,
     private val audit: PortalAuditService
 ) {
+    private val log = LoggerFactory.getLogger(javaClass)
     private val encoder = BCryptPasswordEncoder()
     private val random = SecureRandom()
     private val json = jacksonObjectMapper()
+    private val nextAuthorizationRequestCleanupMs = AtomicLong(0)
+    private val authorizationRequestCleanupCooldownMs = 60_000L
 
     private val knownSettings = listOf(
         "oauth.global" to false,
@@ -166,8 +171,22 @@ class OpenWaveOAuthService(
     }
 
     private fun purgeExpiredAuthorizationRequests() {
+        val nowMs = System.currentTimeMillis()
+        val nextCleanupMs = nextAuthorizationRequestCleanupMs.get()
+        if (nowMs < nextCleanupMs) {
+            return
+        }
+        if (!nextAuthorizationRequestCleanupMs.compareAndSet(nextCleanupMs, nowMs + authorizationRequestCleanupCooldownMs)) {
+            return
+        }
         runCatching {
-            authorizationRequests.deleteExpired(Instant.now())
+            val deleted = authorizationRequests.deleteExpired(Instant.now())
+            if (deleted > 0) {
+                log.info("Purged {} expired OAuth authorization requests.", deleted)
+            }
+        }.onFailure { ex ->
+            nextAuthorizationRequestCleanupMs.set(nowMs)
+            log.warn("Failed to purge expired OAuth authorization requests.", ex)
         }
     }
 
