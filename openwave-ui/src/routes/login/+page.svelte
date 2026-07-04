@@ -8,6 +8,10 @@
   import axios from 'axios';
   import { configuredRegistryUrl } from '$lib/config';
   import { theme } from '$lib/stores/theme';
+  import { Button } from '$lib/components/ui/button/index.js';
+  import { Card, CardContent, CardHeader, CardTitle } from '$lib/components/ui/card/index.js';
+  import { Input } from '$lib/components/ui/input/index.js';
+  import { Label } from '$lib/components/ui/label/index.js';
   import Moon from 'lucide-svelte/icons/moon';
   import Sun from 'lucide-svelte/icons/sun';
   import KeyRound from 'lucide-svelte/icons/key-round';
@@ -24,6 +28,8 @@
   let totpRequired = $state(false);
   let totpCode = $state('');
   let totpChallengeId = $state('');
+  let pendingSession = $state(null);
+  let roleMismatch = $state(null);
   let bankApprovalRequired = $state(false);
   let bankApprovalStatus = $state('PENDING');
   let bankApprovalChallengeId = $state('');
@@ -31,12 +37,17 @@
   let bankApprovalBanks = $state([]);
   let bankApprovalMessage = $state('');
   let bankApprovalIdentifierHint = $state('');
-  let pendingSession = $state(null);
-  let roleMismatch = $state(null);
-  let bankApprovalTimer = null;
   let bankApprovalExpiresIn = $state(0);
+  let bankApprovalTimer = null;
 
-  const unsubTheme = theme.subscribe(t => currentTheme = t);
+  const portalModes = [
+    { value: 'admin', label: 'Registry Admin', hint: 'Directory and system controls' },
+    { value: 'bank', label: 'Bank Portal', hint: 'Enrollment and bank-scoped identity ops' },
+    { value: 'customer', label: 'Customer', hint: 'Self-service identity dashboard' },
+  ];
+
+  const unsubTheme = theme.subscribe((t) => (currentTheme = t));
+
   onDestroy(() => {
     unsubTheme();
     stopBankApprovalPolling();
@@ -44,20 +55,33 @@
 
   onMount(() => {
     theme.init();
-    if (browser) baseUrl = configuredRegistryUrl();
-    passkeySupported = browser && !!window.PublicKeyCredential && window.isSecureContext;
     if (browser) {
+      baseUrl = configuredRegistryUrl();
       const requestedRole = new URL(window.location.href).searchParams.get('role');
-      if (requestedRole === 'admin' || requestedRole === 'bank' || requestedRole === 'customer') mode = requestedRole;
+      if (requestedMode(requestedRole)) {
+        mode = requestedRole;
+      }
+      passkeySupported = !!window.PublicKeyCredential && window.isSecureContext;
     }
+
     const s = get(auth);
     if (s?.role) goto('/portal');
   });
 
+  function requestedMode(value) {
+    return value === 'admin' || value === 'bank' || value === 'customer';
+  }
+
   async function connect() {
     if (loading) return;
-    if (!mode) { toast.error('Choose the portal lane that matches this account'); return; }
-    if (!username.trim() || !password) { toast.error(mode === 'customer' ? 'Enter your username, email, phone, or national ID and password' : 'Enter your username and password'); return; }
+    if (!mode) {
+      toast.error('Choose the portal lane that matches this account');
+      return;
+    }
+    if (!username.trim() || !password) {
+      toast.error(mode === 'customer' ? 'Enter your username, email, phone, or national ID and password' : 'Enter your username and password');
+      return;
+    }
 
     loading = true;
     roleMismatch = null;
@@ -67,6 +91,7 @@
         password,
         role: mode === 'admin' ? 'ADMIN' : mode === 'customer' ? 'CUSTOMER' : 'BANK'
       });
+
       if (r.status === 202 && r.data?.mfa_required) {
         if (r.data?.mfa_method === 'BANK_APP') {
           bankApprovalRequired = true;
@@ -79,16 +104,18 @@
           bankApprovalExpiresIn = Number(r.data.expires_in || 0);
           pendingSession = r.data;
           startBankApprovalPolling();
-          toast.success('Open one of your linked bank apps and approve this sign-in.');
+          toast.success('Open a linked bank app and approve this sign-in request.');
           return;
         }
+
         totpRequired = true;
         totpCode = '';
         totpChallengeId = r.data.challenge_id;
         pendingSession = r.data;
-        toast.success('Enter the 6-digit authenticator code to finish sign in.');
+        toast.success('Enter the 6-digit authenticator code.');
         return;
       }
+
       finishSessionLogin(r.data, 'Connected');
     } catch (e) {
       const status = e.response?.status;
@@ -99,7 +126,7 @@
           portalRole: e.response?.data?.portalRole,
           username: e.response?.data?.username || username.trim()
         };
-        if (expectedRole === 'admin' || expectedRole === 'bank' || expectedRole === 'customer') mode = expectedRole;
+        if (requestedMode(expectedRole)) mode = expectedRole;
         toast.error(`This account belongs to the ${roleLabel(expectedRole)} lane.`);
       } else if (status === 401 || status === 403) {
         toast.error('Invalid credential — access denied');
@@ -123,8 +150,9 @@
     try {
       const r = await axios.post(baseUrl + '/auth/login/totp/verify', {
         challengeId: totpChallengeId,
-        code: totpCode.trim(),
+        code: totpCode.trim()
       });
+
       if (r.status === 202 && r.data?.mfa_required && r.data?.mfa_method === 'BANK_APP') {
         clearTotpPrompt();
         bankApprovalRequired = true;
@@ -137,9 +165,10 @@
         bankApprovalExpiresIn = Number(r.data.expires_in || 0);
         pendingSession = r.data;
         startBankApprovalPolling();
-        toast.success('Authenticator accepted. Finish the sign-in from one of your linked bank apps.');
+        toast.success('Authenticator accepted. Finish in your linked bank app.');
         return;
       }
+
       finishSessionLogin(r.data, 'Connected');
       clearTotpPrompt();
     } catch (e) {
@@ -230,7 +259,10 @@
   }
 
   async function requestReset() {
-    if (!username.trim()) { toast.error('Enter your username or email first'); return; }
+    if (!username.trim()) {
+      toast.error('Enter your username or email first');
+      return;
+    }
     loading = true;
     try {
       await axios.post(baseUrl + '/auth/password-reset/request', { usernameOrEmail: username.trim() });
@@ -244,7 +276,10 @@
   }
 
   async function loginWithPasskey() {
-    if (!passkeySupported) { toast.error('Passkeys are available only on secure browsers that support WebAuthn.'); return; }
+    if (!passkeySupported) {
+      toast.error('Passkeys are available only on secure browsers that support WebAuthn.');
+      return;
+    }
     loading = true;
     try {
       const optionsResponse = await axios.post(baseUrl + '/auth/passkey/options/authenticate', {});
@@ -254,6 +289,7 @@
         ...cred,
         id: base64UrlToBuffer(cred.id)
       }));
+
       const credential = await navigator.credentials.get({ publicKey: requestOptions.publicKey });
       const response = credential.response;
       const payload = {
@@ -291,8 +327,8 @@
   function bufferToBase64Url(value) {
     const bytes = new Uint8Array(value);
     let binary = '';
-    bytes.forEach((b) => binary += String.fromCharCode(b));
-    return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+    bytes.forEach((b) => (binary += String.fromCharCode(b)));
+    return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
   }
 
   function roleLabel(value) {
@@ -303,9 +339,9 @@
   }
 
   function bankApprovalStatusTone(status) {
-    if (status === 'APPROVED') return 'border-emerald-400/20 bg-emerald-400/[0.08] text-emerald-100/85';
-    if (status === 'REJECTED' || status === 'EXPIRED') return 'border-amber-400/20 bg-amber-400/[0.08] text-amber-100/90';
-    return 'border-sky-400/20 bg-sky-400/[0.08] text-sky-100/85';
+    if (status === 'APPROVED') return 'identity-auth-alert identity-auth-alert--success';
+    if (status === 'REJECTED' || status === 'EXPIRED') return 'identity-auth-alert identity-auth-alert--warn';
+    return 'identity-auth-alert identity-auth-alert--info';
   }
 
   function bankApprovalStatusLabel(status) {
@@ -327,317 +363,180 @@
   <title>Sign In - OpenWave Identity Registry</title>
 </svelte:head>
 
-<div class="ow-theme-root min-h-screen bg-[#050508] flex relative overflow-hidden" data-theme={currentTheme} style="font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', sans-serif;">
-  <!-- Ambient glow -->
-  <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[800px] rounded-full bg-indigo-600/[0.04] blur-[140px] pointer-events-none"></div>
-
-  <!-- Left brand panel -->
-  <div class="hidden lg:flex flex-col w-[440px] shrink-0 border-r border-white/[0.06] p-12 justify-between relative">
-    <div class="absolute inset-0 bg-gradient-to-br from-indigo-950/30 via-transparent to-violet-950/20 pointer-events-none"></div>
-
-    <!-- Logo -->
-    <div class="ow-logo-lockup relative">
-      <div class="ow-logo-mark"><span>OW</span></div>
-      <div>
-        <div class="ow-logo-word">OW Identity</div>
-        <div class="ow-logo-sub">NPT handle registry</div>
-      </div>
-    </div>
-
-    <!-- Hero text -->
-    <div class="relative">
-      <h2 class="text-3xl font-semibold text-white leading-tight tracking-tight">
-        Libya-scale digital identity<br/>for OpenWave customers
-      </h2>
-      <p class="mt-4 text-white/40 text-[14px] leading-relaxed">
-        Manage bank-vouched NPT identity, linked payment routes, customer access, and bank-scoped enrollment for Libya’s interoperable payment network.
-      </p>
-
-      <!-- Feature pills -->
-      <div class="mt-8 space-y-2.5">
-        {#each [
-          { label: 'Bank-vouched identity claims', dotClass: 'bg-indigo-400/60' },
-          { label: 'Linked multi-bank payment routes', dotClass: 'bg-violet-400/60' },
-          { label: 'Public alias resolution with gated access', dotClass: 'bg-emerald-400/60' },
-          { label: 'Customer, bank, and registry lanes', dotClass: 'bg-sky-400/60' },
-        ] as f}
-          <div class="flex items-center gap-3">
-            <div class={`w-1.5 h-1.5 rounded-full ${f.dotClass}`}></div>
-            <span class="text-[13px] text-white/40">{f.label}</span>
-          </div>
-        {/each}
-      </div>
-    </div>
-
-    <div class="text-[11px] text-white/20 relative">
-      © {new Date().getFullYear()} Neptune Fintech · OpenWave v1.0
-    </div>
-  </div>
-
-  <!-- Right: login form -->
-  <div class="flex-1 flex items-center justify-center p-8">
-    <div class="w-full max-w-[380px]">
-
-      <!-- Mobile logo -->
-      <div class="lg:hidden ow-logo-lockup mb-10">
-        <div class="ow-logo-mark"><span>OW</span></div>
-        <div>
-          <div class="ow-logo-word">OW Identity</div>
-          <div class="ow-logo-sub">NPT handle registry</div>
-        </div>
-      </div>
-
-      <div class="mb-8">
-        <div class="flex items-start justify-between gap-4">
+<div class="identity-auth-shell ow-theme-root" data-theme={currentTheme}>
+  <main class="identity-auth-frame mx-auto w-full max-w-[30rem]">
+    <Card class="identity-auth-card border shadow-xl">
+      <CardHeader class="space-y-2 pb-4">
+        <div class="flex items-center justify-between gap-3">
           <div>
-            <h1 class="text-2xl font-semibold text-white tracking-tight">{recoveryMode ? 'Reset password' : 'Sign in'}</h1>
-            <p class="text-white/40 text-[13px] mt-1">{recoveryMode ? 'Send a secure email link to reset your password' : mode === 'customer' ? 'Use your NPT username, email, phone, or national ID with your password' : 'Use your portal username and password'}</p>
+            <CardTitle class="identity-auth-title">OpenWave Identity</CardTitle>
           </div>
-          <button
-            onclick={() => theme.toggle()}
-            class="w-9 h-9 rounded-xl border border-white/[0.08] bg-white/[0.04] hover:bg-white/[0.07] text-white/60 hover:text-white flex items-center justify-center transition-all"
-            title="Toggle theme"
+          <Button type="button" variant="ghost" size="icon" aria-label="Toggle theme" on:click={() => theme.toggle()}>
+            {#if currentTheme === 'dark'}<Sun class="h-4 w-4" />{:else}<Moon class="h-4 w-4" />{/if}
+          </Button>
+        </div>
+      </CardHeader>
+
+      <CardContent class="identity-auth-form">
+        {#if !recoveryMode && !totpRequired && !bankApprovalRequired}
+          <div class="grid grid-cols-1 gap-2 sm:grid-cols-3">
+            {#each portalModes as p}
+              <Button
+                type="button"
+                variant={mode === p.value ? 'default' : 'outline'}
+                class="h-auto px-3 py-2 text-left"
+                on:click={() => (mode = p.value)}
+              >
+                <div class="text-sm font-semibold">{p.label}</div>
+              </Button>
+            {/each}
+          </div>
+        {/if}
+
+        {#if recoveryMode}
+          <div class="space-y-3.5">
+            <Label for="identity-reset-username">Username or email</Label>
+            <Input
+              id="identity-reset-username"
+              bind:value={username}
+              disabled={loading}
+              placeholder="Portal username or email"
+            />
+            {#if recoverySent}
+              <div class="identity-auth-alert identity-auth-alert--success identity-auth-compact">
+                Reset link has been sent if the account exists.
+              </div>
+            {/if}
+            <Button class="w-full" on:click={requestReset} disabled={loading || !username.trim() || recoverySent}>
+              {#if loading}Sending...{:else if recoverySent}Reset link sent{:else}Send reset link{/if}
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              class="w-full"
+              on:click={() => {
+                recoveryMode = false;
+                recoverySent = false;
+              }}
+            >
+              Back to sign in
+            </Button>
+          </div>
+        {:else}
+          <form
+            class="identity-auth-form"
+            onsubmit={(event) => {
+              event.preventDefault();
+              if (totpRequired) verifyTotp();
+              else connect();
+            }}
           >
-            {#if currentTheme === 'dark'}<Sun class="w-4 h-4" />{:else}<Moon class="w-4 h-4" />{/if}
-          </button>
-        </div>
-      </div>
+            {#if bankApprovalRequired}
+              <div class={bankApprovalStatusTone(bankApprovalStatus)}>
+                <p class="font-medium">{bankApprovalMessage}</p>
+                <p class="mt-1 text-xs opacity-90">For: {bankApprovalIdentifierHint}</p>
+              </div>
 
-      <!-- Mode toggle -->
-      {#if !recoveryMode && !totpRequired && !bankApprovalRequired}
-      <div class="flex rounded-xl bg-white/[0.04] border border-white/[0.08] p-1 mb-6">
-        <button
-          onclick={() => mode = 'admin'}
-          class="flex-1 py-2 rounded-lg text-[13px] font-medium transition-all
-            {mode === 'admin' ? 'bg-indigo-600 text-white shadow-sm' : 'text-white/40 hover:text-white/70'}">
-          Registry Admin
-        </button>
-        <button
-          onclick={() => mode = 'bank'}
-          class="flex-1 py-2 rounded-lg text-[13px] font-medium transition-all
-            {mode === 'bank' ? 'bg-emerald-600 text-white shadow-sm' : 'text-white/40 hover:text-white/70'}">
-          Bank Portal
-        </button>
-        <button
-          onclick={() => mode = 'customer'}
-          class="flex-1 py-2 rounded-lg text-[13px] font-medium transition-all
-            {mode === 'customer' ? 'bg-sky-600 text-white shadow-sm' : 'text-white/40 hover:text-white/70'}">
-          Customer
-        </button>
-      </div>
-      <p class="mb-6 text-[12px] text-white/35">Choose the portal lane first. The same username can only sign into the lane it belongs to.</p>
-      {/if}
+              <div class="identity-auth-alert identity-auth-alert--info identity-auth-compact space-y-2 text-xs">
+                <p>Open one linked bank app and approve the request, then this page will continue automatically.</p>
+                <p>Status: <span class="font-semibold">{bankApprovalStatusLabel(bankApprovalStatus)}</span> · Expires in {fmtCountdown(bankApprovalExpiresIn)}</p>
+                {#if bankApprovalBanks.length}
+                  <ul class="space-y-1">
+                    {#each bankApprovalBanks as bank}
+                      <li class="flex items-center justify-between">
+                        <span>{bank.alias}</span>
+                        <span class="opacity-70">{bank.isDefault ? 'Default route' : bank.bankHandle || 'Bank'}</span>
+                      </li>
+                    {/each}
+                  </ul>
+                {/if}
+              </div>
 
-      <!-- Form -->
-      {#if recoveryMode}
-      <div class="space-y-4">
-        <div>
-          <label for="identity-reset-username" class="block text-[11px] font-medium text-white/40 mb-1.5 uppercase tracking-wider">Username or email</label>
-          <input id="identity-reset-username" bind:value={username} class="w-full bg-white/[0.05] border border-white/[0.1] rounded-xl px-4 py-3 text-[13px] text-white placeholder-white/20 focus:outline-none focus:border-indigo-500/60 focus:bg-white/[0.07] transition-all" placeholder="Portal username or email"/>
-        </div>
-        {#if recoverySent}
-          <div class="rounded-xl border border-emerald-400/20 bg-emerald-400/[0.08] px-4 py-3 text-[13px] leading-relaxed text-emerald-100/85">
-            If the account exists, a one-time reset link has been emailed. Open the link to choose a new password.
-          </div>
-        {/if}
-        <button onclick={requestReset} disabled={loading || !username.trim() || recoverySent} class="w-full py-3 text-[14px] font-semibold text-white rounded-xl transition-all disabled:opacity-30 disabled:cursor-not-allowed bg-indigo-600 hover:bg-indigo-500">
-          {#if loading}<span class="inline-block w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin mr-2 align-middle"></span>{/if}
-          {recoverySent ? 'Reset link sent' : 'Send secure reset link'}
-        </button>
-        <button onclick={() => { recoveryMode = false; recoverySent = false; }} class="w-full py-3 text-[13px] font-semibold text-white/50 hover:text-white rounded-xl transition-all">Back to sign in</button>
-      </div>
-      {:else}
-      <div class="space-y-4">
-        {#if !totpRequired && !bankApprovalRequired}
-          <div class="grid gap-2">
-            {#if mode === 'customer'}
-              <div class="rounded-xl border border-sky-400/15 bg-sky-400/[0.06] px-4 py-3">
-                <div class="text-[11px] font-semibold uppercase tracking-wider text-sky-200/70">Customer sign-in paths</div>
-                <div class="mt-2 grid gap-2 sm:grid-cols-2">
-                  <div class="rounded-lg border border-white/[0.06] bg-black/20 px-3 py-2 text-[12px] text-white/70">
-                    <div class="font-semibold text-white/85">Direct portal access</div>
-                    <div class="mt-1">Use NPT username or email with password, then finish passkey or authenticator if enabled.</div>
-                  </div>
-                  <div class="rounded-lg border border-white/[0.06] bg-black/20 px-3 py-2 text-[12px] text-white/70">
-                    <div class="font-semibold text-white/85">Public-identifier access</div>
-                    <div class="mt-1">Phone number or national ID can start login, but one linked bank app still has to approve the request.</div>
-                  </div>
-                </div>
+              <div class="grid gap-2">
+                <Button type="button" on:click={checkBankApprovalStatus} disabled={loading}>
+                  {loading ? 'Checking...' : 'Refresh approval status'}
+                </Button>
+                <Button type="button" variant="ghost" on:click={clearBankApprovalPrompt}>Use another sign-in method</Button>
               </div>
-            {:else if mode === 'bank'}
-              <div class="rounded-xl border border-emerald-400/15 bg-emerald-400/[0.06] px-4 py-3 text-[12px] text-emerald-100/80">
-                Bank users are scoped to one bank. Use this lane for customer enrollment, linked-account operations, approval queues, and bank reports.
+            {:else if totpRequired}
+              <Label for="identity-totp">Authenticator code</Label>
+              <Input
+                id="identity-totp"
+                bind:value={totpCode}
+                on:keydown={onKey}
+                inputmode="numeric"
+                maxlength="6"
+                class="font-mono"
+                placeholder="123456"
+              />
+              <div class="grid gap-2">
+                <Button type="button" on:click={verifyTotp} disabled={loading || totpCode.trim().length < 6}>
+                  {#if loading}Verifying...{:else}Verify code{/if}
+                </Button>
+                <Button type="button" variant="ghost" on:click={clearTotpPrompt}>Use another method</Button>
               </div>
-            {:else if mode === 'admin'}
-              <div class="rounded-xl border border-indigo-400/15 bg-indigo-400/[0.06] px-4 py-3 text-[12px] text-indigo-100/80">
-                Registry admins can manage banks, identities, audit trails, and cross-bank directory operations from one controlled portal lane.
-              </div>
-            {/if}
-          </div>
-        {/if}
-        <div>
-          <label for="identity-username" class="block text-[11px] font-medium text-white/40 mb-1.5 uppercase tracking-wider">{mode === 'customer' ? 'Username, email, phone, or national ID' : 'Username'}</label>
-          <input
-            id="identity-username"
-            bind:value={username}
-            onkeydown={onKey}
-            disabled={totpRequired || bankApprovalRequired}
-            class="w-full bg-white/[0.05] border border-white/[0.1] rounded-xl px-4 py-3 text-[13px] text-white placeholder-white/20 focus:outline-none focus:border-indigo-500/60 focus:bg-white/[0.07] transition-all"
-            placeholder={mode === 'customer' ? 'NPT username, email, phone, or national ID' : 'Portal username'}
-          />
-        </div>
-        {#if roleMismatch}
-          <div class="rounded-xl border border-amber-400/20 bg-amber-400/[0.08] px-4 py-3 text-[13px] leading-relaxed text-amber-100/90">
-            <div class="font-semibold">This account belongs to {roleLabel(roleMismatch.expectedRole)}.</div>
-            <div class="mt-1 text-amber-100/70">The lane selector has been switched. Sign in again with the same username and password.</div>
-          </div>
-        {/if}
-        {#if bankApprovalRequired}
-          <div class={`rounded-xl border px-4 py-3 text-[13px] leading-relaxed ${bankApprovalStatusTone(bankApprovalStatus)}`}>
-            {bankApprovalMessage} <span class="font-semibold">{bankApprovalIdentifierHint}</span>.
-          </div>
-          <div class="rounded-xl border border-white/[0.08] bg-white/[0.03] px-4 py-3">
-            <div class="text-[11px] uppercase tracking-wider text-white/35">What happens next</div>
-            <div class="mt-3 space-y-2 text-[12px] text-white/65">
-              <div>1. Open one of the linked bank apps below.</div>
-              <div>2. Review the OpenWave Identity sign-in request.</div>
-              <div>3. Confirm it with the bank app’s normal security step.</div>
-              <div>4. Return here. This page will keep checking for approval.</div>
-            </div>
-            <div class="mt-3 text-[11px] text-white/35">
-              Username or email sign-in can finish directly after password. Phone and national-ID sign-in require linked-bank approval so the registry does not issue identity access from a reusable public identifier alone.
-            </div>
-          </div>
-          <div class="rounded-xl border border-white/[0.08] bg-white/[0.03] px-4 py-3">
-            <div class="text-[11px] uppercase tracking-wider text-white/35">Linked bank apps</div>
-            <div class="mt-3 space-y-2">
-              {#each bankApprovalBanks as bank}
-                <div class="flex items-center justify-between rounded-lg border border-white/[0.06] bg-black/20 px-3 py-2 text-[13px] text-white/75">
-                  <div>{bank.alias}</div>
-                  <div class="text-white/35">{bank.isDefault ? 'Default route' : bank.bankHandle}</div>
-                </div>
-              {/each}
-            </div>
-            <div class="mt-3 flex items-center justify-between gap-3 text-[11px] text-white/35">
-              <span>Status: {bankApprovalStatusLabel(bankApprovalStatus)}</span>
-              <span>Expires in {fmtCountdown(bankApprovalExpiresIn)}</span>
-            </div>
-          </div>
-          <button
-            onclick={checkBankApprovalStatus}
-            disabled={loading}
-            class="w-full py-3 text-[14px] font-semibold text-white rounded-xl transition-all disabled:opacity-30 disabled:cursor-not-allowed mt-2 bg-sky-600 hover:bg-sky-500 shadow-[0_0_24px_rgba(14,165,233,0.25)]">
-            Check approval status
-          </button>
-          <button onclick={clearBankApprovalPrompt} class="w-full py-2 text-[12px] font-semibold text-white/45 hover:text-white transition-all">
-            Cancel and use another sign-in method
-          </button>
-        {:else if totpRequired}
-          <div class="rounded-xl border border-indigo-400/20 bg-indigo-400/[0.08] px-4 py-3 text-[13px] leading-relaxed text-indigo-100/85">
-            Authenticator verification is required for <span class="font-semibold">{pendingSession?.username || username}</span>.
-          </div>
-          <div>
-            <label for="identity-totp" class="block text-[11px] font-medium text-white/40 uppercase tracking-wider mb-1.5">Authenticator code</label>
-            <input
-              id="identity-totp"
-              bind:value={totpCode}
-              onkeydown={onKey}
-              inputmode="numeric"
-              maxlength="6"
-              class="w-full bg-white/[0.05] border border-white/[0.1] rounded-xl px-4 py-3 text-[13px] text-white placeholder-white/20 focus:outline-none focus:border-indigo-500/60 focus:bg-white/[0.07] transition-all font-mono tracking-[0.2em]"
-              placeholder="123456"
-            />
-            <p class="text-[11px] text-white/25 mt-1.5">Use the 6-digit code from your authenticator app.</p>
-          </div>
-          <button
-            onclick={verifyTotp}
-            disabled={loading || totpCode.trim().length < 6}
-            class="w-full py-3 text-[14px] font-semibold text-white rounded-xl transition-all disabled:opacity-30 disabled:cursor-not-allowed mt-2 bg-indigo-600 hover:bg-indigo-500 shadow-[0_0_24px_rgba(99,102,241,0.3)]">
-            {#if loading}
-              <span class="inline-block w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin mr-2 align-middle"></span>
-              Verifying...
             {:else}
-              Verify authenticator
+              <div class="space-y-2">
+                <Label for="identity-username">{mode === 'customer' ? 'Username / Email / Phone / National ID' : 'Username'}</Label>
+                <Input
+                  id="identity-username"
+                  bind:value={username}
+                  on:keydown={onKey}
+                  disabled={loading}
+                  placeholder={mode === 'customer' ? 'username, email, phone, or national ID' : 'portal username'}
+                />
+              </div>
+
+              {#if roleMismatch}
+                <div class="identity-auth-alert identity-auth-alert--warn identity-auth-compact">
+                  <p class="font-medium">This account belongs to {roleLabel(roleMismatch.expectedRole)}.</p>
+                  <p class="text-xs opacity-90">Switch to that lane and use the same credentials.</p>
+                </div>
+              {/if}
+
+              <div class="space-y-2">
+                <div class="flex items-center justify-between gap-3">
+                  <Label for="identity-password">Password</Label>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    on:click={() => {
+                      recoveryMode = true;
+                    }}
+                  >
+                    Forgot password?
+                  </Button>
+                </div>
+                <Input
+                  id="identity-password"
+                  type="password"
+                  bind:value={password}
+                  on:keydown={onKey}
+                  disabled={loading}
+                  placeholder="Portal password"
+                />
+              </div>
+
+              <div class="grid gap-2">
+                <Button class="w-full" on:click={connect} disabled={loading || !mode || !username.trim() || !password}>
+                  {#if loading}Connecting...{:else}Sign in as {mode ? roleLabel(mode) : 'Portal user'}{/if}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  on:click={loginWithPasskey}
+                  disabled={loading || !passkeySupported}
+                  class="w-full"
+                >
+                  <span class="inline-flex items-center gap-2"><KeyRound class="h-4 w-4" />Sign in with passkey</span>
+                </Button>
+              </div>
             {/if}
-          </button>
-          <button onclick={clearTotpPrompt} class="w-full py-2 text-[12px] font-semibold text-white/45 hover:text-white transition-all">
-            Use another sign-in method
-          </button>
-        {:else}
-          <div>
-            <div class="flex items-center justify-between gap-3 mb-1.5">
-              <label for="identity-password" class="block text-[11px] font-medium text-white/40 uppercase tracking-wider">Password</label>
-              <button onclick={() => { recoveryMode = true; }} class="text-[11px] font-semibold text-indigo-300 hover:text-indigo-200 transition-colors">
-                Forgot password?
-              </button>
-            </div>
-            <input
-              id="identity-password"
-              type="password"
-              bind:value={password}
-              onkeydown={onKey}
-              class="w-full bg-white/[0.05] border border-white/[0.1] rounded-xl px-4 py-3 text-[13px] text-white placeholder-white/20 focus:outline-none focus:border-indigo-500/60 focus:bg-white/[0.07] transition-all"
-              placeholder="Portal password"
-            />
-            <p class="text-[11px] text-white/25 mt-1.5">System API keys remain available for integrations, but portal access uses user credentials.</p>
-          </div>
-
-          <button
-            onclick={connect}
-            disabled={loading || !mode || !username.trim() || !password}
-            class="w-full py-3 text-[14px] font-semibold text-white rounded-xl transition-all disabled:opacity-30 disabled:cursor-not-allowed mt-2
-              {mode === 'admin'
-                ? 'bg-indigo-600 hover:bg-indigo-500 shadow-[0_0_24px_rgba(99,102,241,0.3)]'
-                : mode === 'customer'
-                  ? 'bg-sky-600 hover:bg-sky-500 shadow-[0_0_24px_rgba(14,165,233,0.25)]'
-                  : mode === 'bank'
-                    ? 'bg-emerald-600 hover:bg-emerald-500 shadow-[0_0_24px_rgba(16,185,129,0.25)]'
-                    : 'bg-white/[0.08] text-white/45 shadow-none'}">
-            {#if loading}
-              <span class="inline-block w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin mr-2 align-middle"></span>
-              Connecting...
-            {:else}
-              {mode ? `Connect to ${roleLabel(mode)}` : 'Choose a portal lane'}
-            {/if}
-          </button>
-          <button
-            onclick={loginWithPasskey}
-            disabled={loading || !passkeySupported}
-            class="w-full py-3 text-[14px] font-semibold rounded-xl transition-all disabled:opacity-30 disabled:cursor-not-allowed border border-white/[0.10] text-white/75 hover:bg-white/[0.06] flex items-center justify-center gap-2">
-            <KeyRound class="w-4 h-4" />
-            Sign in with passkey
-          </button>
-          <button onclick={() => { recoveryMode = true; }} class="w-full py-2 text-[12px] font-semibold text-white/45 hover:text-white transition-all">
-            Send secure password reset link
-          </button>
+          </form>
         {/if}
-      </div>
-      {/if}
 
-      <!-- Role description -->
-      <div class="mt-6 rounded-xl border border-white/[0.06] bg-white/[0.02] px-4 py-3">
-        {#if mode === 'admin'}
-          <div class="text-[11px] text-white/30 leading-relaxed">
-            <span class="text-indigo-400 font-medium">Admin access</span> - registry-wide control for banks, identities, audit, and digital-identity operations.
-          </div>
-        {:else if mode === 'customer'}
-          <div class="text-[11px] text-white/30 leading-relaxed">
-            <span class="text-sky-400 font-medium">Customer access</span> - manage your OpenWave identity, linked bank routes, and portal protection with passkeys or authenticator codes.
-          </div>
-        {:else if mode === 'bank'}
-          <div class="text-[11px] text-white/30 leading-relaxed">
-            <span class="text-emerald-400 font-medium">Bank access</span> - scoped to one bank for customer enrollment, linked-account maintenance, and bank-vouched identity approvals.
-          </div>
-        {:else}
-          <div class="text-[11px] text-white/30 leading-relaxed">
-            <span class="text-white/70 font-medium">Choose a portal lane</span> - customer for self-service, bank for scoped bank operations, registry admin for full directory control.
-          </div>
-        {/if}
-      </div>
-
-      <p class="mt-4 text-[11px] text-white/25 leading-relaxed">
-        Password reset links are short-lived, single-use, and sent only to the email on the account.
-      </p>
-    </div>
-  </div>
+      </CardContent>
+    </Card>
+  </main>
 </div>

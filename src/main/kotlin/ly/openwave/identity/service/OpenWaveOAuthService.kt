@@ -11,6 +11,7 @@ import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import org.springframework.web.server.ResponseStatusException
 import java.net.URI
+import java.net.URLEncoder
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.time.Instant
@@ -31,6 +32,7 @@ class OpenWaveOAuthService(
     private val tokens: OAuthTokenRepository,
     private val settings: OAuthSettingRepository,
     private val grants: OAuthUserGrantRepository,
+    private val authorizationRequests: OAuthAuthorizationRequestRepository,
     private val audit: PortalAuditService
 ) {
     private val encoder = BCryptPasswordEncoder()
@@ -56,8 +58,8 @@ class OpenWaveOAuthService(
         "revocation_endpoint" to "$baseUrl/oauth/revoke",
         "introspection_endpoint" to "$baseUrl/oauth/introspect",
         "jwks_uri" to "$baseUrl/oauth/jwks",
-        "response_types_supported" to emptyList<String>(),
-        "grant_types_supported" to listOf("client_credentials", "refresh_token"),
+        "response_types_supported" to listOf("code"),
+        "grant_types_supported" to listOf("authorization_code", "client_credentials", "refresh_token"),
         "token_endpoint_auth_methods_supported" to listOf("client_secret_basic", "client_secret_post"),
         "code_challenge_methods_supported" to listOf("S256"),
         "scopes_supported" to supportedScopes()
@@ -106,6 +108,150 @@ class OpenWaveOAuthService(
     }
 
     fun listClients(): List<Map<String, Any?>> = clients.findAll().sortedBy { it.clientId }.map { clientResponse(it, null) }
+
+    @Transactional
+    fun createAuthorizationRequest(
+        clientId: String,
+        redirectUri: String,
+        responseType: String,
+        scopeText: String,
+        codeChallenge: String,
+        codeChallengeMethod: String?,
+        state: String?,
+        audience: String?,
+        environmentText: String?
+    ): Map<String, Any?> {
+        ensureSettings()
+        requireSetting("oauth.global")
+        if (responseType != "code") throw ResponseStatusException(HttpStatus.BAD_REQUEST, "response_type must be code")
+        if ((codeChallengeMethod ?: "S256") != "S256") {
+            throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Only PKCE S256 is supported")
+        }
+        if (codeChallenge.isBlank()) throw ResponseStatusException(HttpStatus.BAD_REQUEST, "code_challenge is required")
+        val client = clients.findByClientId(clientId) ?: throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Unknown OAuth client")
+        validateClientOperationalGates(client, environmentText)
+        val redirects = parseJsonList(client.redirectUris)
+        if (redirectUri !in redirects) {
+            throw ResponseStatusException(HttpStatus.BAD_REQUEST, "redirect_uri is not registered for this client")
+        }
+        val requested = parseScopeText(scopeText)
+        if (requested.isEmpty()) throw ResponseStatusException(HttpStatus.BAD_REQUEST, "scope is required")
+        val allowed = parseJsonList(client.allowedScopes).toSet()
+        val granted = requested.filter { it in allowed }.toSet()
+        if (granted.size != requested.size || granted.isEmpty()) {
+            throw ResponseStatusException(HttpStatus.FORBIDDEN, "Requested scope is not allowed for this client")
+        }
+        val environment = parseEnvironment(environmentText)
+        val request = authorizationRequests.save(
+            OAuthAuthorizationRequestEntity(
+                requestId = "owar_${randomToken(18)}",
+                clientId = client.clientId,
+                redirectUri = redirectUri,
+                scopes = granted.joinToString(" "),
+                audience = audience?.takeIf { it.isNotBlank() } ?: "astro",
+                environment = environment,
+                state = state?.takeIf { it.isNotBlank() },
+                codeChallenge = codeChallenge,
+                codeChallengeMethod = "S256",
+                requestExpiresAt = Instant.now().plusSeconds(600)
+            )
+        )
+        audit.record(null, "OAUTH_AUTHORIZATION_REQUEST_CREATED", "OAUTH_CLIENT", client.clientId, mapOf("request_id" to request.requestId))
+        return mapOf(
+            "request_id" to request.requestId,
+            "consent_url" to "/portal/oauth-consent?request_id=${urlEncode(request.requestId)}",
+            "expires_at" to request.requestExpiresAt
+        )
+    }
+
+    @Transactional
+    fun consentRequest(requestId: String, authentication: Authentication?): Map<String, Any?> {
+        val req = authorizationRequests.findById(requestId).orElseThrow {
+            ResponseStatusException(HttpStatus.NOT_FOUND, "OAuth consent request not found")
+        }
+        expireIfNeeded(req)
+        val role = portalRole(authentication)
+        val scopes = req.scopes.split(" ").filter { it.isNotBlank() }
+        if (!roleAllowedForScopes(role, scopes)) {
+            throw ResponseStatusException(HttpStatus.FORBIDDEN, "This portal role cannot approve the requested scopes")
+        }
+        val client = clients.findByClientId(req.clientId)
+        return consentRequestResponse(req, client)
+    }
+
+    @Transactional
+    fun approveConsentRequest(requestId: String, authentication: Authentication?): Map<String, Any?> {
+        val req = authorizationRequests.findById(requestId).orElseThrow {
+            ResponseStatusException(HttpStatus.NOT_FOUND, "OAuth consent request not found")
+        }
+        expireIfNeeded(req)
+        if (req.status != OAuthAuthorizationStatus.PENDING) {
+            throw ResponseStatusException(HttpStatus.CONFLICT, "OAuth consent request is not pending")
+        }
+        val role = portalRole(authentication)
+        val scopes = req.scopes.split(" ").filter { it.isNotBlank() }
+        if (!roleAllowedForScopes(role, scopes)) {
+            throw ResponseStatusException(HttpStatus.FORBIDDEN, "This portal role cannot approve the requested scopes")
+        }
+        val client = clients.findByClientId(req.clientId) ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "OAuth client not found")
+        val subject = authentication?.name ?: throw ResponseStatusException(HttpStatus.UNAUTHORIZED, "Portal session required")
+        val now = Instant.now()
+        val grant = grants.save(
+            OAuthUserGrantEntity(
+                subject = subject,
+                clientId = client.clientId,
+                scopes = req.scopes,
+                audience = req.audience,
+                environment = req.environment,
+                ownerType = client.ownerType,
+                ownerId = client.ownerId,
+                ownerHandle = client.ownerHandle,
+                approvedBy = subject
+            )
+        )
+        val code = "owac_${randomToken(32)}"
+        req.subject = subject
+        req.subjectRole = role
+        req.status = OAuthAuthorizationStatus.APPROVED
+        req.authorizationCodeHash = sha256(code)
+        req.codeExpiresAt = now.plusSeconds(600)
+        req.approvedAt = now
+        req.updatedAt = now
+        req.grantId = grant.id
+        authorizationRequests.save(req)
+        audit.record(authentication, "OAUTH_CONSENT_APPROVED", "OAUTH_CLIENT", client.clientId, mapOf("request_id" to requestId, "grant_id" to grant.id))
+        return mapOf(
+            "request_id" to requestId,
+            "status" to req.status.name,
+            "redirect_url" to redirectWith(req.redirectUri, mapOf("code" to code, "state" to req.state))
+        )
+    }
+
+    @Transactional
+    fun rejectConsentRequest(requestId: String, authentication: Authentication?): Map<String, Any?> {
+        val req = authorizationRequests.findById(requestId).orElseThrow {
+            ResponseStatusException(HttpStatus.NOT_FOUND, "OAuth consent request not found")
+        }
+        expireIfNeeded(req)
+        if (req.status != OAuthAuthorizationStatus.PENDING) {
+            throw ResponseStatusException(HttpStatus.CONFLICT, "OAuth consent request is not pending")
+        }
+        val role = portalRole(authentication)
+        val scopes = req.scopes.split(" ").filter { it.isNotBlank() }
+        if (!roleAllowedForScopes(role, scopes)) {
+            throw ResponseStatusException(HttpStatus.FORBIDDEN, "This portal role cannot reject the requested scopes")
+        }
+        req.status = OAuthAuthorizationStatus.REJECTED
+        req.rejectedAt = Instant.now()
+        req.updatedAt = req.rejectedAt!!
+        authorizationRequests.save(req)
+        audit.record(authentication, "OAUTH_CONSENT_REJECTED", "OAUTH_CLIENT", req.clientId, mapOf("request_id" to requestId))
+        return mapOf(
+            "request_id" to requestId,
+            "status" to req.status.name,
+            "redirect_url" to redirectWith(req.redirectUri, mapOf("error" to "access_denied", "state" to req.state))
+        )
+    }
 
     @Transactional
     fun updateClient(clientId: String, req: UpdateOAuthClientRequest, authentication: Authentication?): Map<String, Any?> {
@@ -174,6 +320,45 @@ class OpenWaveOAuthService(
         return mapOf("subject" to subject, "revoked_tokens" to tokenRows.size, "revoked_grants" to grantRows.size)
     }
 
+    fun listGrants(authentication: Authentication?): List<Map<String, Any?>> {
+        val role = portalRole(authentication)
+        if (role != "ADMIN") throw ResponseStatusException(HttpStatus.FORBIDDEN, "Registry admin required")
+        return grants.findAll().sortedByDescending { it.createdAt }.map { grantResponse(it) }
+    }
+
+    fun listCustomerGrants(authentication: Authentication?): List<Map<String, Any?>> {
+        val role = portalRole(authentication)
+        if (role != "CUSTOMER") throw ResponseStatusException(HttpStatus.FORBIDDEN, "Customer session required")
+        val subject = authentication?.name ?: throw ResponseStatusException(HttpStatus.UNAUTHORIZED, "Portal session required")
+        return grants.findAllBySubject(subject).sortedByDescending { it.createdAt }.map { grantResponse(it) }
+    }
+
+    @Transactional
+    fun revokeGrant(grantId: Long, authentication: Authentication?, customerOnly: Boolean = false): Map<String, Any?> {
+        val role = portalRole(authentication)
+        if (customerOnly && role != "CUSTOMER") throw ResponseStatusException(HttpStatus.FORBIDDEN, "Customer session required")
+        if (!customerOnly && role != "ADMIN") throw ResponseStatusException(HttpStatus.FORBIDDEN, "Registry admin required")
+        val grant = grants.findById(grantId).orElseThrow { ResponseStatusException(HttpStatus.NOT_FOUND, "OAuth grant not found") }
+        if (customerOnly && grant.subject != authentication?.name) {
+            throw ResponseStatusException(HttpStatus.NOT_FOUND, "OAuth grant not found")
+        }
+        val now = Instant.now()
+        if (grant.active) {
+            grant.active = false
+            grant.revokedAt = now
+            grant.revokedBy = authentication?.name ?: "system"
+            grants.save(grant)
+        }
+        val tokenRows = tokens.findAllBySubject(grant.subject).filter { it.clientId == grant.clientId }
+        tokenRows.filter { it.revokedAt == null }.forEach {
+            it.revokedAt = now
+            it.revokeReason = "grant_revoked"
+        }
+        tokens.saveAll(tokenRows)
+        audit.record(authentication, "OAUTH_GRANT_REVOKED", "OAUTH_GRANT", grantId.toString(), mapOf("tokens" to tokenRows.size))
+        return mapOf("grant" to grantResponse(grant), "revoked_tokens" to tokenRows.size)
+    }
+
     @Transactional
     fun issueClientCredentials(
         clientId: String,
@@ -186,12 +371,7 @@ class OpenWaveOAuthService(
         requireSetting("oauth.global")
         val client = clients.findByClientId(clientId) ?: throw ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid client")
         validateClientSecret(client, clientSecret)
-        val environment = parseEnvironment(environmentText)
-        requireSetting("environment.${environment.name.lowercase()}")
-        requireSetting("owner.${client.ownerType.name}")
-        if (environment == OAuthEnvironment.LIVE && !client.liveEnabled) {
-            throw ResponseStatusException(HttpStatus.FORBIDDEN, "Live OAuth access is disabled for this client")
-        }
+        val environment = validateClientOperationalGates(client, environmentText)
         // RFC 6749 §3.3: an absent/empty `scope` must NOT be treated as "grant everything".
         // Require the client to request scopes explicitly; never widen to the full allowed set.
         val requested = parseScopeText(scopeText)
@@ -213,6 +393,7 @@ class OpenWaveOAuthService(
                 refreshTokenHash = sha256(refreshToken),
                 clientId = client.clientId,
                 subject = client.clientId,
+                subjectRole = "CLIENT",
                 audience = audience?.takeIf { it.isNotBlank() } ?: "astro",
                 scopes = granted.joinToString(" "),
                 ownerType = client.ownerType,
@@ -228,16 +409,83 @@ class OpenWaveOAuthService(
         return OAuthTokenIssueResult(accessToken, refreshToken, props.accessTokenTtlSeconds, granted.joinToString(" "))
     }
 
+    @Transactional
+    fun exchangeAuthorizationCode(
+        clientId: String,
+        clientSecret: String?,
+        code: String,
+        redirectUri: String,
+        codeVerifier: String
+    ): OAuthTokenIssueResult {
+        ensureSettings()
+        requireSetting("oauth.global")
+        val client = authenticateClient(clientId, clientSecret)
+        val req = authorizationRequests.findByAuthorizationCodeHash(sha256(code))
+            ?: throw ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid authorization code")
+        if (req.clientId != client.clientId) throw ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid authorization code")
+        if (req.status != OAuthAuthorizationStatus.APPROVED || req.exchangedAt != null) {
+            throw ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authorization code has already been used")
+        }
+        if (Instant.now().isAfter(req.codeExpiresAt ?: req.requestExpiresAt)) {
+            req.status = OAuthAuthorizationStatus.EXPIRED
+            req.updatedAt = Instant.now()
+            authorizationRequests.save(req)
+            throw ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authorization code expired")
+        }
+        if (redirectUri != req.redirectUri) {
+            throw ResponseStatusException(HttpStatus.BAD_REQUEST, "redirect_uri does not match authorization request")
+        }
+        if (!pkceS256Matches(codeVerifier, req.codeChallenge)) {
+            throw ResponseStatusException(HttpStatus.BAD_REQUEST, "PKCE verification failed")
+        }
+        validateClientOperationalGates(client, req.environment.name)
+        val grantId = req.grantId ?: throw ResponseStatusException(HttpStatus.UNAUTHORIZED, "OAuth grant is missing")
+        val grant = grants.findById(grantId).orElseThrow { ResponseStatusException(HttpStatus.UNAUTHORIZED, "OAuth grant is missing") }
+        if (!grant.active) throw ResponseStatusException(HttpStatus.UNAUTHORIZED, "OAuth grant was revoked")
+        val accessToken = "owat_${randomToken(40)}"
+        val refreshToken = "owrt_${randomToken(40)}"
+        val now = Instant.now()
+        req.status = OAuthAuthorizationStatus.EXCHANGED
+        req.exchangedAt = now
+        req.updatedAt = now
+        authorizationRequests.save(req)
+        tokens.save(
+            OAuthTokenEntity(
+                tokenHash = sha256(accessToken),
+                refreshTokenHash = sha256(refreshToken),
+                clientId = client.clientId,
+                subject = req.subject ?: throw ResponseStatusException(HttpStatus.UNAUTHORIZED, "OAuth subject is missing"),
+                subjectRole = req.subjectRole,
+                audience = req.audience,
+                scopes = req.scopes,
+                ownerType = client.ownerType,
+                ownerId = client.ownerId,
+                ownerHandle = client.ownerHandle,
+                environment = req.environment,
+                grantType = "authorization_code",
+                grantId = grant.id,
+                issuedAt = now,
+                expiresAt = now.plusSeconds(props.accessTokenTtlSeconds),
+                refreshExpiresAt = now.plusSeconds(props.refreshTokenTtlSeconds)
+            )
+        )
+        return OAuthTokenIssueResult(accessToken, refreshToken, props.accessTokenTtlSeconds, req.scopes)
+    }
+
     // noRollbackFor: when refresh-token reuse is detected we revoke the active token family and
     // THEN throw 401. Without this, Spring would roll back the family-revocation along with the
     // exception, leaving the leaked descendant usable. The legitimate failure throws below write
     // nothing, so suppressing rollback for them is harmless.
     @Transactional(noRollbackFor = [ResponseStatusException::class])
-    fun refresh(refreshToken: String, scopeText: String?): OAuthTokenIssueResult {
+    fun refresh(refreshToken: String, clientId: String?, clientSecret: String?, scopeText: String?): OAuthTokenIssueResult {
         ensureSettings()
         requireSetting("oauth.global")
         val row = tokens.findByRefreshTokenHash(sha256(refreshToken))
             ?: throw ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid refresh token")
+        val client = authenticateClient(clientId, clientSecret)
+        if (client.clientId != row.clientId) {
+            throw ResponseStatusException(HttpStatus.UNAUTHORIZED, "Refresh token was not issued to this client")
+        }
         // OAuth 2.0 Security BCP (RFC 9700 §4.14.2) / RFC 6819 §5.2.2.3 refresh-token reuse
         // detection: each refresh token is single-use and revoked the moment it is rotated
         // (revokeReason = "refresh_rotated"). Presenting an already-rotated refresh token means
@@ -255,7 +503,6 @@ class OpenWaveOAuthService(
         if (Instant.now().isAfter(row.refreshExpiresAt ?: row.expiresAt)) {
             throw ResponseStatusException(HttpStatus.UNAUTHORIZED, "Refresh token expired or revoked")
         }
-        val client = clients.findByClientId(row.clientId) ?: throw ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid client")
         requireSetting("environment.${row.environment.name.lowercase()}")
         requireSetting("owner.${row.ownerType.name}")
         val requested = parseScopeText(scopeText).ifEmpty { row.scopes.split(" ").filter { it.isNotBlank() }.toSet() }
@@ -292,6 +539,7 @@ class OpenWaveOAuthService(
                 refreshTokenHash = sha256(refreshToken),
                 clientId = client.clientId,
                 subject = source.subject,
+                subjectRole = source.subjectRole,
                 audience = source.audience,
                 scopes = scopes.joinToString(" "),
                 ownerType = source.ownerType,
@@ -299,6 +547,7 @@ class OpenWaveOAuthService(
                 ownerHandle = source.ownerHandle,
                 environment = source.environment,
                 grantType = "refresh_token",
+                grantId = source.grantId,
                 issuedAt = now,
                 expiresAt = now.plusSeconds(props.accessTokenTtlSeconds),
                 refreshExpiresAt = now.plusSeconds(props.refreshTokenTtlSeconds)
@@ -338,10 +587,12 @@ class OpenWaveOAuthService(
         return mapOf("revoked" to true)
     }
 
-    fun introspect(token: String, requiredAudience: String? = null): Map<String, Any?> {
+    fun introspect(token: String, requiredAudience: String? = null, caller: OAuthClientEntity): Map<String, Any?> {
         ensureSettings()
         val row = tokens.findByTokenHash(sha256(token)) ?: return mapOf("active" to false)
         val client = clients.findByClientId(row.clientId)
+        val callerMayRead = caller.clientId == row.clientId || canResourceServerIntrospect(caller)
+        if (!callerMayRead) return mapOf("active" to false)
         val now = Instant.now()
         val active = row.revokedAt == null &&
             now.isBefore(row.expiresAt) &&
@@ -357,9 +608,11 @@ class OpenWaveOAuthService(
                 "active" to true,
                 "iss" to props.issuer.trimEnd('/'),
                 "sub" to row.subject,
+                "subject_role" to row.subjectRole,
                 "aud" to row.audience,
                 "scope" to row.scopes,
                 "client_id" to row.clientId,
+                "grant_id" to row.grantId,
                 "owner_type" to row.ownerType.name,
                 "owner_id" to row.ownerId,
                 "owner_handle" to row.ownerHandle,
@@ -489,6 +742,116 @@ class OpenWaveOAuthService(
         "note" to setting.note
     )
 
+    private fun consentRequestResponse(req: OAuthAuthorizationRequestEntity, client: OAuthClientEntity?) = mapOf(
+        "request_id" to req.requestId,
+        "client_id" to req.clientId,
+        "client_name" to (client?.displayName ?: req.clientId),
+        "client_type" to client?.clientType?.name,
+        "owner_type" to client?.ownerType?.name,
+        "owner_id" to client?.ownerId,
+        "owner_handle" to client?.ownerHandle,
+        "redirect_uri" to req.redirectUri,
+        "scopes" to req.scopes.split(" ").filter { it.isNotBlank() },
+        "audience" to req.audience,
+        "environment" to req.environment.name,
+        "state_present" to !req.state.isNullOrBlank(),
+        "status" to req.status.name,
+        "request_expires_at" to req.requestExpiresAt,
+        "code_expires_at" to req.codeExpiresAt,
+        "approved_at" to req.approvedAt,
+        "rejected_at" to req.rejectedAt,
+        "exchanged_at" to req.exchangedAt
+    )
+
+    private fun grantResponse(grant: OAuthUserGrantEntity) = mapOf(
+        "grant_id" to grant.id,
+        "subject" to grant.subject,
+        "client_id" to grant.clientId,
+        "scopes" to grant.scopes.split(" ").filter { it.isNotBlank() },
+        "audience" to grant.audience,
+        "environment" to grant.environment.name,
+        "owner_type" to grant.ownerType.name,
+        "owner_id" to grant.ownerId,
+        "owner_handle" to grant.ownerHandle,
+        "active" to grant.active,
+        "created_at" to grant.createdAt,
+        "revoked_at" to grant.revokedAt,
+        "revoked_by" to grant.revokedBy
+    )
+
+    private fun expireIfNeeded(req: OAuthAuthorizationRequestEntity) {
+        if (req.status == OAuthAuthorizationStatus.PENDING && Instant.now().isAfter(req.requestExpiresAt)) {
+            req.status = OAuthAuthorizationStatus.EXPIRED
+            req.updatedAt = Instant.now()
+            authorizationRequests.save(req)
+        }
+    }
+
+    private fun validateClientOperationalGates(client: OAuthClientEntity, environmentText: String?): OAuthEnvironment {
+        if (!client.active || client.revokedAt != null) {
+            throw ResponseStatusException(HttpStatus.UNAUTHORIZED, "Client is disabled")
+        }
+        val environment = parseEnvironment(environmentText)
+        requireSetting("environment.${environment.name.lowercase()}")
+        requireSetting("owner.${client.ownerType.name}")
+        val allowedEnvironments = client.allowedEnvironments.split(",").map { it.trim().uppercase() }.filter { it.isNotBlank() }
+        if (environment.name !in allowedEnvironments) {
+            throw ResponseStatusException(HttpStatus.FORBIDDEN, "Environment is not allowed for this client")
+        }
+        if (environment == OAuthEnvironment.LIVE && !client.liveEnabled) {
+            throw ResponseStatusException(HttpStatus.FORBIDDEN, "Live OAuth access is disabled for this client")
+        }
+        return environment
+    }
+
+    private fun portalRole(authentication: Authentication?): String {
+        val role = authentication?.authorities
+            ?.map { it.authority.removePrefix("ROLE_") }
+            ?.firstOrNull { it in setOf("ADMIN", "BANK", "CUSTOMER") }
+        return role ?: throw ResponseStatusException(HttpStatus.UNAUTHORIZED, "Portal session required")
+    }
+
+    private fun roleAllowedForScopes(role: String, scopes: List<String>): Boolean {
+        if (scopes.any { it == "openwave:tokens.introspect" || it.startsWith("openwave:mcp") || it.startsWith("openwave:owner") }) {
+            return role == "ADMIN"
+        }
+        if (scopes.any { it.startsWith("astro:") && !it.startsWith("astro:bank.") }) {
+            return role == "ADMIN"
+        }
+        if (scopes.any { it.startsWith("identity:bank.") || it.startsWith("astro:bank.") }) {
+            return role == "ADMIN" || role == "BANK"
+        }
+        if (scopes.any { it.startsWith("identity:customer.") }) {
+            return role == "CUSTOMER"
+        }
+        return role == "ADMIN"
+    }
+
+    private fun canResourceServerIntrospect(client: OAuthClientEntity): Boolean =
+        client.clientType == OAuthClientType.RESOURCE_SERVER &&
+            client.active &&
+            client.revokedAt == null &&
+            "openwave:tokens.introspect" in parseJsonList(client.allowedScopes)
+
+    private fun pkceS256Matches(verifier: String, challenge: String): Boolean {
+        val value = verifier.trim()
+        if (value.length !in 43..128) return false
+        val digest = MessageDigest.getInstance("SHA-256").digest(value.toByteArray())
+        val computed = Base64.getUrlEncoder().withoutPadding().encodeToString(digest)
+        return MessageDigest.isEqual(computed.toByteArray(), challenge.toByteArray())
+    }
+
+    private fun redirectWith(base: String, params: Map<String, String?>): String {
+        val query = params.entries
+            .filter { !it.value.isNullOrBlank() }
+            .joinToString("&") { "${urlEncode(it.key)}=${urlEncode(it.value!!)}" }
+        if (query.isBlank()) return base
+        return base + if (base.contains("?")) "&$query" else "?$query"
+    }
+
+    private fun urlEncode(value: String): String =
+        URLEncoder.encode(value, Charsets.UTF_8).replace("+", "%20")
+
     private fun randomToken(bytes: Int): String {
         val raw = ByteArray(bytes)
         random.nextBytes(raw)
@@ -509,6 +872,7 @@ class OpenWaveOAuthService(
         "identity:customer.profile.read",
         "openwave:mcp.read",
         "openwave:mcp.write",
+        "openwave:tokens.introspect",
         "openwave:owner.ops.read"
     )
 }

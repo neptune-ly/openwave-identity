@@ -20,6 +20,9 @@ import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
+import java.net.URI
+import java.security.MessageDigest
+import java.util.Base64
 
 @SpringBootTest(
     properties = [
@@ -58,7 +61,7 @@ class OAuthAndResolveSecurityTests {
 
     @Test
     fun `empty scope on client_credentials grants nothing instead of full allowed set`() {
-        val secret = createConfidentialClient(listOf("identity:registry.read", "identity:bank.aliases.read"))
+        val secret = createConfidentialClient(scopes = listOf("identity:registry.read", "identity:bank.aliases.read"))
 
         // Absent scope must be rejected, never widened to the client's full allowed set.
         mockMvc.perform(
@@ -83,7 +86,7 @@ class OAuthAndResolveSecurityTests {
 
     @Test
     fun `introspect requires client authentication`() {
-        val secret = createConfidentialClient(listOf("identity:registry.read"))
+        val secret = createConfidentialClient(scopes = listOf("identity:registry.read"))
         val accessToken = issueToken(secret, "identity:registry.read")
 
         // No client credentials -> 401.
@@ -115,7 +118,7 @@ class OAuthAndResolveSecurityTests {
 
     @Test
     fun `revoke requires client authentication`() {
-        val secret = createConfidentialClient(listOf("identity:registry.read"))
+        val secret = createConfidentialClient(scopes = listOf("identity:registry.read"))
         val accessToken = issueToken(secret, "identity:registry.read")
 
         mockMvc.perform(
@@ -136,14 +139,14 @@ class OAuthAndResolveSecurityTests {
 
     @Test
     fun `replaying a rotated refresh token revokes the whole active token family`() {
-        val secret = createConfidentialClient(listOf("identity:registry.read"))
+        val secret = createConfidentialClient(scopes = listOf("identity:registry.read"))
 
         // Initial issuance gives us refresh token RT1.
         val firstTokens = issueTokenPair(secret, "identity:registry.read")
         val rt1 = firstTokens.second
 
         // Legitimate rotation: RT1 -> (AT2, RT2). RT1 is now single-use/spent.
-        val rotated = refresh(rt1)
+        val rotated = refresh(rt1, CLIENT_ID, secret)
         val at2 = rotated.first
         val rt2 = rotated.second
 
@@ -155,6 +158,8 @@ class OAuthAndResolveSecurityTests {
             post("/oauth/token")
                 .contentType(MediaType.APPLICATION_FORM_URLENCODED)
                 .param("grant_type", "refresh_token")
+                .param("client_id", CLIENT_ID)
+                .param("client_secret", secret)
                 .param("refresh_token", rt1)
         ).andExpect(status().isUnauthorized)
 
@@ -166,8 +171,182 @@ class OAuthAndResolveSecurityTests {
             post("/oauth/token")
                 .contentType(MediaType.APPLICATION_FORM_URLENCODED)
                 .param("grant_type", "refresh_token")
+                .param("client_id", CLIENT_ID)
+                .param("client_secret", secret)
                 .param("refresh_token", rt2)
         ).andExpect(status().isUnauthorized)
+    }
+
+    @Test
+    fun `refresh token is bound to the issuing client`() {
+        val secret = createConfidentialClient(scopes = listOf("identity:registry.read"))
+        val otherSecret = createConfidentialClient(
+            clientId = "owc_other_client",
+            scopes = listOf("identity:registry.read")
+        )
+        val refreshToken = issueTokenPair(secret, "identity:registry.read").second
+
+        mockMvc.perform(
+            post("/oauth/token")
+                .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                .param("grant_type", "refresh_token")
+                .param("client_id", "owc_other_client")
+                .param("client_secret", otherSecret)
+                .param("refresh_token", refreshToken)
+        ).andExpect(status().isUnauthorized)
+    }
+
+    @Test
+    fun `authorization code with PKCE exchanges once and rejects replay`() {
+        val secret = createConfidentialClient(
+            scopes = listOf("openwave:owner.ops.read"),
+            redirectUris = listOf("https://client.example.test/callback")
+        )
+        val verifier = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~abc"
+        val challenge = pkceChallenge(verifier)
+
+        val created = mockMvc.perform(
+            get("/oauth/authorize")
+                .queryParam("client_id", CLIENT_ID)
+                .queryParam("redirect_uri", "https://client.example.test/callback")
+                .queryParam("response_type", "code")
+                .queryParam("scope", "openwave:owner.ops.read")
+                .queryParam("code_challenge", challenge)
+                .queryParam("code_challenge_method", "S256")
+                .queryParam("state", "state-123")
+        ).andExpect(status().isFound)
+            .andReturn().response.contentAsString
+        val requestId = objectMapper.readTree(created).requiredText("request_id")
+
+        val approved = mockMvc.perform(
+            post("/oauth/consent-requests/{requestId}/approve", requestId)
+                .header("X-OpenWave-Registry-Key", "test-admin-key")
+        ).andExpect(status().isOk)
+            .andReturn().response.contentAsString
+        val redirectUrl = objectMapper.readTree(approved).requiredText("redirect_url")
+        val code = queryParam(redirectUrl, "code")
+        assertThat(queryParam(redirectUrl, "state")).isEqualTo("state-123")
+
+        mockMvc.perform(
+            post("/oauth/token")
+                .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                .param("grant_type", "authorization_code")
+                .param("client_id", CLIENT_ID)
+                .param("client_secret", secret)
+                .param("code", code)
+                .param("redirect_uri", "https://client.example.test/callback")
+                .param("code_verifier", verifier)
+        ).andExpect(status().isOk)
+            .andExpect(jsonPath("$.scope").value("openwave:owner.ops.read"))
+
+        mockMvc.perform(
+            post("/oauth/token")
+                .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                .param("grant_type", "authorization_code")
+                .param("client_id", CLIENT_ID)
+                .param("client_secret", secret)
+                .param("code", code)
+                .param("redirect_uri", "https://client.example.test/callback")
+                .param("code_verifier", verifier)
+        ).andExpect(status().isUnauthorized)
+    }
+
+    @Test
+    fun `authorization code rejects redirect mismatch`() {
+        val secret = createConfidentialClient(
+            scopes = listOf("openwave:owner.ops.read"),
+            redirectUris = listOf("https://client.example.test/callback")
+        )
+        val verifier = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~def"
+        val challenge = pkceChallenge(verifier)
+
+        mockMvc.perform(
+            get("/oauth/authorize")
+                .queryParam("client_id", CLIENT_ID)
+                .queryParam("redirect_uri", "https://attacker.example.test/callback")
+                .queryParam("response_type", "code")
+                .queryParam("scope", "openwave:owner.ops.read")
+                .queryParam("code_challenge", challenge)
+                .queryParam("code_challenge_method", "S256")
+        ).andExpect(status().isBadRequest)
+
+        val code = approvedAuthorizationCode(challenge)
+        mockMvc.perform(
+            post("/oauth/token")
+                .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                .param("grant_type", "authorization_code")
+                .param("client_id", CLIENT_ID)
+                .param("client_secret", secret)
+                .param("code", code)
+                .param("redirect_uri", "https://client.example.test/other-callback")
+                .param("code_verifier", verifier)
+        ).andExpect(status().isBadRequest)
+    }
+
+    @Test
+    fun `authorization code rejects PKCE mismatch and plain challenge method`() {
+        val secret = createConfidentialClient(
+            scopes = listOf("openwave:owner.ops.read"),
+            redirectUris = listOf("https://client.example.test/callback")
+        )
+        val verifier = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~ghi"
+        val challenge = pkceChallenge(verifier)
+
+        mockMvc.perform(
+            get("/oauth/authorize")
+                .queryParam("client_id", CLIENT_ID)
+                .queryParam("redirect_uri", "https://client.example.test/callback")
+                .queryParam("response_type", "code")
+                .queryParam("scope", "openwave:owner.ops.read")
+                .queryParam("code_challenge", challenge)
+                .queryParam("code_challenge_method", "plain")
+        ).andExpect(status().isBadRequest)
+
+        val code = approvedAuthorizationCode(challenge)
+        mockMvc.perform(
+            post("/oauth/token")
+                .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                .param("grant_type", "authorization_code")
+                .param("client_id", CLIENT_ID)
+                .param("client_secret", secret)
+                .param("code", code)
+                .param("redirect_uri", "https://client.example.test/callback")
+                .param("code_verifier", "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~bad")
+        ).andExpect(status().isBadRequest)
+    }
+
+    @Test
+    fun `only resource server clients can introspect tokens owned by another client`() {
+        val secret = createConfidentialClient(scopes = listOf("identity:registry.read"))
+        val accessToken = issueToken(secret, "identity:registry.read")
+        val otherSecret = createConfidentialClient(
+            clientId = "owc_other_client",
+            scopes = listOf("identity:registry.read")
+        )
+        val resourceSecret = createConfidentialClient(
+            clientId = "owrs_astro",
+            clientType = "RESOURCE_SERVER",
+            scopes = listOf("openwave:tokens.introspect")
+        )
+
+        mockMvc.perform(
+            post("/oauth/introspect")
+                .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                .param("token", accessToken)
+                .param("client_id", "owc_other_client")
+                .param("client_secret", otherSecret)
+        ).andExpect(status().isOk)
+            .andExpect(jsonPath("$.active").value(false))
+
+        mockMvc.perform(
+            post("/oauth/introspect")
+                .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                .param("token", accessToken)
+                .param("client_id", "owrs_astro")
+                .param("client_secret", resourceSecret)
+        ).andExpect(status().isOk)
+            .andExpect(jsonPath("$.active").value(true))
+            .andExpect(jsonPath("$.client_id").value(CLIENT_ID))
     }
 
     @Test
@@ -261,7 +440,12 @@ class OAuthAndResolveSecurityTests {
 
     // --- helpers -------------------------------------------------------------
 
-    private fun createConfidentialClient(scopes: List<String>): String {
+    private fun createConfidentialClient(
+        clientId: String = CLIENT_ID,
+        clientType: String = "CONFIDENTIAL",
+        scopes: List<String>,
+        redirectUris: List<String> = emptyList()
+    ): String {
         val response = mockMvc.perform(
             post("/oauth/admin/clients")
                 .header("X-OpenWave-Registry-Key", "test-admin-key")
@@ -269,10 +453,11 @@ class OAuthAndResolveSecurityTests {
                 .content(
                     objectMapper.writeValueAsString(
                         mapOf(
-                            "clientId" to CLIENT_ID,
+                            "clientId" to clientId,
                             "displayName" to "Test Client",
-                            "clientType" to "CONFIDENTIAL",
+                            "clientType" to clientType,
                             "ownerType" to "NEPTUNE",
+                            "redirectUris" to redirectUris,
                             "allowedScopes" to scopes,
                             "allowedEnvironments" to listOf("SANDBOX")
                         )
@@ -310,11 +495,13 @@ class OAuthAndResolveSecurityTests {
         return node.get("access_token").asText() to node.get("refresh_token").asText()
     }
 
-    private fun refresh(refreshToken: String): Pair<String, String> {
+    private fun refresh(refreshToken: String, clientId: String, clientSecret: String): Pair<String, String> {
         val response = mockMvc.perform(
             post("/oauth/token")
                 .contentType(MediaType.APPLICATION_FORM_URLENCODED)
                 .param("grant_type", "refresh_token")
+                .param("client_id", clientId)
+                .param("client_secret", clientSecret)
                 .param("refresh_token", refreshToken)
         ).andExpect(status().isOk)
             .andReturn().response.contentAsString
@@ -331,6 +518,26 @@ class OAuthAndResolveSecurityTests {
                 .param("client_secret", secret)
         ).andExpect(status().isOk)
             .andExpect(jsonPath("$.active").value(expectedActive))
+    }
+
+    private fun approvedAuthorizationCode(challenge: String): String {
+        val created = mockMvc.perform(
+            get("/oauth/authorize")
+                .queryParam("client_id", CLIENT_ID)
+                .queryParam("redirect_uri", "https://client.example.test/callback")
+                .queryParam("response_type", "code")
+                .queryParam("scope", "openwave:owner.ops.read")
+                .queryParam("code_challenge", challenge)
+                .queryParam("code_challenge_method", "S256")
+        ).andExpect(status().isFound)
+            .andReturn().response.contentAsString
+        val requestId = objectMapper.readTree(created).requiredText("request_id")
+        val approved = mockMvc.perform(
+            post("/oauth/consent-requests/{requestId}/approve", requestId)
+                .header("X-OpenWave-Registry-Key", "test-admin-key")
+        ).andExpect(status().isOk)
+            .andReturn().response.contentAsString
+        return queryParam(objectMapper.readTree(approved).requiredText("redirect_url"), "code")
     }
 
     private fun enableSwitch(key: String) {
@@ -385,6 +592,20 @@ class OAuthAndResolveSecurityTests {
 
     private fun JsonNode.requiredText(field: String): String =
         get(field)?.asText() ?: error("Missing '$field' in $this")
+
+    private fun pkceChallenge(verifier: String): String =
+        Base64.getUrlEncoder().withoutPadding().encodeToString(
+            MessageDigest.getInstance("SHA-256").digest(verifier.toByteArray())
+        )
+
+    private fun queryParam(url: String, key: String): String {
+        val query = URI(url).rawQuery ?: error("No query in $url")
+        return query.split("&")
+            .map { it.substringBefore("=") to it.substringAfter("=", "") }
+            .firstOrNull { it.first == key }
+            ?.second
+            ?: error("No $key in $url")
+    }
 
     private fun MockHttpServletRequestBuilder.bankKey(apiKey: String) =
         header("X-OpenWave-Bank-Key", apiKey)

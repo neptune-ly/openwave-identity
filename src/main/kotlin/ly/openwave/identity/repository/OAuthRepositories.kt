@@ -1,5 +1,6 @@
 package ly.openwave.identity.repository
 
+import ly.openwave.identity.entity.OAuthAuthorizationRequestEntity
 import ly.openwave.identity.entity.OAuthClientEntity
 import ly.openwave.identity.entity.OAuthMcpAuditEventEntity
 import ly.openwave.identity.entity.OAuthSettingEntity
@@ -27,6 +28,11 @@ interface OAuthSettingRepository : JpaRepository<OAuthSettingEntity, String> {
 
 interface OAuthUserGrantRepository : JpaRepository<OAuthUserGrantEntity, Long> {
     fun findAllBySubject(subject: String): List<OAuthUserGrantEntity>
+    fun findAllBySubjectAndClientIdAndActiveIsTrue(subject: String, clientId: String): List<OAuthUserGrantEntity>
 }
 
 interface OAuthMcpAuditEventRepository : JpaRepository<OAuthMcpAuditEventEntity, Long>
+
+interface OAuthAuthorizationRequestRepository : JpaRepository<OAuthAuthorizationRequestEntity, String> {
+    fun findByAuthorizationCodeHash(authorizationCodeHash: String): OAuthAuthorizationRequestEntity?
+}

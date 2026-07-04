@@ -3,9 +3,10 @@ package ly.openwave.identity.entity
 import jakarta.persistence.*
 import java.time.Instant
 
-enum class OAuthClientType { CONFIDENTIAL, PUBLIC, AGENT }
+enum class OAuthClientType { CONFIDENTIAL, PUBLIC, AGENT, RESOURCE_SERVER }
 enum class OAuthOwnerType { NEPTUNE, MERCHANT, BANK, CUSTOMER }
 enum class OAuthEnvironment { SANDBOX, LIVE }
+enum class OAuthAuthorizationStatus { PENDING, APPROVED, REJECTED, EXCHANGED, EXPIRED }
 
 @Entity
 @Table(name = "oauth_clients")
@@ -85,6 +86,9 @@ class OAuthTokenEntity(
     @Column(name = "subject", nullable = false, length = 160)
     val subject: String,
 
+    @Column(name = "subject_role", length = 40)
+    val subjectRole: String? = null,
+
     @Column(name = "audience", nullable = false, length = 80)
     val audience: String,
 
@@ -107,6 +111,9 @@ class OAuthTokenEntity(
 
     @Column(name = "grant_type", nullable = false, length = 40)
     val grantType: String,
+
+    @Column(name = "grant_id")
+    val grantId: Long? = null,
 
     @Column(name = "issued_at", nullable = false, updatable = false)
     val issuedAt: Instant = Instant.now(),
@@ -159,6 +166,13 @@ class OAuthUserGrantEntity(
     @Column(name = "scopes", nullable = false, columnDefinition = "TEXT")
     val scopes: String,
 
+    @Column(name = "audience", nullable = false, length = 80)
+    var audience: String = "astro",
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "environment", nullable = false, length = 20)
+    var environment: OAuthEnvironment = OAuthEnvironment.SANDBOX,
+
     @Enumerated(EnumType.STRING)
     @Column(name = "owner_type", nullable = false, length = 40)
     val ownerType: OAuthOwnerType,
@@ -175,11 +189,84 @@ class OAuthUserGrantEntity(
     @Column(name = "created_at", nullable = false, updatable = false)
     val createdAt: Instant = Instant.now(),
 
+    @Column(name = "approved_by", length = 160)
+    val approvedBy: String? = null,
+
     @Column(name = "revoked_at")
     var revokedAt: Instant? = null,
 
     @Column(name = "revoked_by", length = 160)
     var revokedBy: String? = null
+)
+
+@Entity
+@Table(name = "oauth_authorization_requests")
+class OAuthAuthorizationRequestEntity(
+    @Id
+    @Column(name = "request_id", nullable = false, length = 80)
+    val requestId: String,
+
+    @Column(name = "client_id", nullable = false, length = 80)
+    val clientId: String,
+
+    @Column(name = "subject", length = 160)
+    var subject: String? = null,
+
+    @Column(name = "subject_role", length = 40)
+    var subjectRole: String? = null,
+
+    @Column(name = "redirect_uri", nullable = false, length = 500)
+    val redirectUri: String,
+
+    @Column(name = "scopes", nullable = false, columnDefinition = "TEXT")
+    val scopes: String,
+
+    @Column(name = "audience", nullable = false, length = 80)
+    val audience: String = "astro",
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "environment", nullable = false, length = 20)
+    val environment: OAuthEnvironment = OAuthEnvironment.SANDBOX,
+
+    @Column(name = "state", length = 500)
+    val state: String? = null,
+
+    @Column(name = "code_challenge", nullable = false, length = 160)
+    val codeChallenge: String,
+
+    @Column(name = "code_challenge_method", nullable = false, length = 20)
+    val codeChallengeMethod: String = "S256",
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "status", nullable = false, length = 20)
+    var status: OAuthAuthorizationStatus = OAuthAuthorizationStatus.PENDING,
+
+    @Column(name = "authorization_code_hash", unique = true, length = 128)
+    var authorizationCodeHash: String? = null,
+
+    @Column(name = "request_expires_at", nullable = false)
+    val requestExpiresAt: Instant,
+
+    @Column(name = "code_expires_at")
+    var codeExpiresAt: Instant? = null,
+
+    @Column(name = "approved_at")
+    var approvedAt: Instant? = null,
+
+    @Column(name = "rejected_at")
+    var rejectedAt: Instant? = null,
+
+    @Column(name = "exchanged_at")
+    var exchangedAt: Instant? = null,
+
+    @Column(name = "grant_id")
+    var grantId: Long? = null,
+
+    @Column(name = "created_at", nullable = false, updatable = false)
+    val createdAt: Instant = Instant.now(),
+
+    @Column(name = "updated_at", nullable = false)
+    var updatedAt: Instant = Instant.now()
 )
 
 @Entity

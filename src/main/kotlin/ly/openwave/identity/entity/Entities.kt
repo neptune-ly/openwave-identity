@@ -1,6 +1,7 @@
 package ly.openwave.identity.entity
 
 import jakarta.persistence.*
+import org.hibernate.annotations.ColumnTransformer
 import java.security.MessageDigest
 import java.time.Instant
 
@@ -75,6 +76,7 @@ class PortalAuditEventEntity(
     val entityId: String,
 
     @Column(name = "details", columnDefinition = "JSONB")
+    @ColumnTransformer(write = "?::jsonb")
     val details: String? = null,
 
     @Column(name = "created_at", nullable = false, updatable = false)

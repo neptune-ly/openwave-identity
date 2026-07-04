@@ -29,11 +29,32 @@ class OAuthController(
     fun jwks(): Map<String, Any?> = oauth.jwks()
 
     @GetMapping("/oauth/authorize")
-    fun authorizePlaceholder(): ResponseEntity<Any> =
-        ResponseEntity.status(HttpStatus.NOT_IMPLEMENTED).body(mapOf(
-            "error" to "authorization_code_not_enabled",
-            "message" to "Authorization code + PKCE is reserved for the delegated-access UI milestone. Use client_credentials for v1 server-side and MCP access."
-        ))
+    fun authorize(
+        @RequestParam("client_id") clientId: String,
+        @RequestParam("redirect_uri") redirectUri: String,
+        @RequestParam("response_type") responseType: String,
+        @RequestParam("scope") scope: String,
+        @RequestParam("code_challenge") codeChallenge: String,
+        @RequestParam("code_challenge_method", required = false) codeChallengeMethod: String?,
+        @RequestParam("state", required = false) state: String?,
+        @RequestParam("audience", required = false) audience: String?,
+        @RequestParam("environment", required = false) environment: String?
+    ): ResponseEntity<Any> {
+        val created = oauth.createAuthorizationRequest(
+            clientId = clientId,
+            redirectUri = redirectUri,
+            responseType = responseType,
+            scopeText = scope,
+            codeChallenge = codeChallenge,
+            codeChallengeMethod = codeChallengeMethod,
+            state = state,
+            audience = audience,
+            environmentText = environment
+        )
+        return ResponseEntity.status(HttpStatus.FOUND)
+            .header("Location", created["consent_url"].toString())
+            .body(created)
+    }
 
     @PostMapping("/oauth/token", consumes = [MediaType.APPLICATION_FORM_URLENCODED_VALUE])
     fun token(
@@ -44,7 +65,10 @@ class OAuthController(
         @RequestParam("scope", required = false) scope: String?,
         @RequestParam("audience", required = false) audience: String?,
         @RequestParam("environment", required = false) environment: String?,
-        @RequestParam("refresh_token", required = false) refreshToken: String?
+        @RequestParam("refresh_token", required = false) refreshToken: String?,
+        @RequestParam("code", required = false) code: String?,
+        @RequestParam("redirect_uri", required = false) redirectUri: String?,
+        @RequestParam("code_verifier", required = false) codeVerifier: String?
     ): Map<String, Any?> {
         val basic = basicClientCredentials(request)
         val clientId = basic?.first ?: clientIdParam
@@ -57,8 +81,17 @@ class OAuthController(
                 audience = audience,
                 environmentText = environment
             )
+            "authorization_code" -> oauth.exchangeAuthorizationCode(
+                clientId = clientId ?: throw ResponseStatusException(HttpStatus.BAD_REQUEST, "client_id is required"),
+                clientSecret = clientSecret,
+                code = code ?: throw ResponseStatusException(HttpStatus.BAD_REQUEST, "code is required"),
+                redirectUri = redirectUri ?: throw ResponseStatusException(HttpStatus.BAD_REQUEST, "redirect_uri is required"),
+                codeVerifier = codeVerifier ?: throw ResponseStatusException(HttpStatus.BAD_REQUEST, "code_verifier is required")
+            )
             "refresh_token" -> oauth.refresh(
                 refreshToken = refreshToken ?: throw ResponseStatusException(HttpStatus.BAD_REQUEST, "refresh_token is required"),
+                clientId = clientId,
+                clientSecret = clientSecret,
                 scopeText = scope
             )
             else -> throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Unsupported grant_type")
@@ -82,8 +115,8 @@ class OAuthController(
     ): Map<String, Any?> {
         val basic = basicClientCredentials(request)
         // RFC 7662 §2.1: the introspection endpoint MUST require authentication.
-        oauth.authenticateClient(basic?.first ?: clientIdParam, basic?.second ?: clientSecretParam)
-        return oauth.introspect(token, audience)
+        val client = oauth.authenticateClient(basic?.first ?: clientIdParam, basic?.second ?: clientSecretParam)
+        return oauth.introspect(token, audience, client)
     }
 
     @PostMapping("/oauth/revoke", consumes = [MediaType.APPLICATION_FORM_URLENCODED_VALUE])
@@ -142,6 +175,34 @@ class OAuthController(
     @PostMapping("/oauth/admin/users/{userId}/revoke-grants")
     fun revokeUserGrants(@PathVariable userId: String, authentication: Authentication?): Map<String, Any?> =
         oauth.revokeUserGrants(userId, authentication)
+
+    @GetMapping("/oauth/admin/grants")
+    fun grants(authentication: Authentication?): Map<String, Any?> =
+        mapOf("grants" to oauth.listGrants(authentication))
+
+    @PostMapping("/oauth/admin/grants/{grantId}/revoke")
+    fun revokeGrant(@PathVariable grantId: Long, authentication: Authentication?): Map<String, Any?> =
+        oauth.revokeGrant(grantId, authentication)
+
+    @GetMapping("/oauth/consent-requests/{requestId}")
+    fun consentRequest(@PathVariable requestId: String, authentication: Authentication?): Map<String, Any?> =
+        oauth.consentRequest(requestId, authentication)
+
+    @PostMapping("/oauth/consent-requests/{requestId}/approve")
+    fun approveConsentRequest(@PathVariable requestId: String, authentication: Authentication?): Map<String, Any?> =
+        oauth.approveConsentRequest(requestId, authentication)
+
+    @PostMapping("/oauth/consent-requests/{requestId}/reject")
+    fun rejectConsentRequest(@PathVariable requestId: String, authentication: Authentication?): Map<String, Any?> =
+        oauth.rejectConsentRequest(requestId, authentication)
+
+    @GetMapping("/customer/oauth/grants")
+    fun customerGrants(authentication: Authentication?): Map<String, Any?> =
+        mapOf("grants" to oauth.listCustomerGrants(authentication))
+
+    @PostMapping("/customer/oauth/grants/{grantId}/revoke")
+    fun revokeCustomerGrant(@PathVariable grantId: Long, authentication: Authentication?): Map<String, Any?> =
+        oauth.revokeGrant(grantId, authentication, customerOnly = true)
 
     private fun baseUrl(request: HttpServletRequest): String {
         val forwardedProto = request.getHeader("X-Forwarded-Proto")

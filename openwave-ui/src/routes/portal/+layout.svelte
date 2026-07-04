@@ -11,6 +11,7 @@
   import Settings from 'lucide-svelte/icons/settings';
   import UserCog from 'lucide-svelte/icons/user-cog';
   import KeyRound from 'lucide-svelte/icons/key-round';
+  import ShieldCheck from 'lucide-svelte/icons/shield-check';
   import ClipboardList from 'lucide-svelte/icons/clipboard-list';
   import BellRing from 'lucide-svelte/icons/bell-ring';
   import Moon from 'lucide-svelte/icons/moon';
@@ -65,6 +66,7 @@
     { href: '/portal/login-approvals', label: 'Login Approvals', icon: BellRing,     exact: false, roles: ['BANK'] },
     { href: '/portal/reports',      label: 'Reports',           icon: ClipboardList,   exact: false, roles: ['ADMIN', 'BANK'] },
     { href: '/portal/users',        label: 'Users',             icon: UserCog,         exact: false, roles: ['ADMIN', 'BANK'] },
+    { href: '/portal/oauth',        label: 'OAuth Control',     icon: ShieldCheck,     exact: false, roles: ['ADMIN'] },
     { href: '/portal/manage',       label: 'Manage',            icon: Settings,        exact: false, roles: ['ADMIN'] },
     { href: '/portal/audit',        label: 'Audit',             icon: ClipboardList,   exact: false, roles: ['ADMIN'] },
     { href: '/portal/security',     label: 'Security',          icon: KeyRound,        exact: false, roles: ['ADMIN', 'BANK', 'CUSTOMER'] },

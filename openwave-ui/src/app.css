@@ -1052,6 +1052,114 @@ select option {
   font-weight: 750;
 }
 
+/* Auth pages (login + reset-password) */
+.identity-auth-shell {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 1.25rem;
+  color: #f8fafc;
+  background:
+    radial-gradient(circle at 50% 10%, rgba(0, 168, 174, 0.16), transparent 44%),
+    radial-gradient(circle at 10% 82%, rgba(235, 78, 77, 0.12), transparent 30%),
+    linear-gradient(135deg, #05070c 0%, #0b101e 58%, #090b12 100%);
+}
+
+.identity-auth-shell[data-theme='light'] {
+  color: #121821;
+  background:
+    radial-gradient(circle at 50% 10%, rgba(59, 193, 238, 0.16), transparent 42%),
+    radial-gradient(circle at 10% 82%, rgba(235, 78, 77, 0.10), transparent 30%),
+    linear-gradient(135deg, #ffffff 0%, #f3f6fa 55%, #eef3f8 100%);
+}
+
+.identity-auth-card {
+  width: 100%;
+  max-width: 32rem;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(2, 8, 22, 0.72);
+  backdrop-filter: blur(4px);
+}
+
+.identity-auth-shell[data-theme='light'] .identity-auth-card {
+  border-color: rgba(15, 23, 42, 0.12);
+  background: rgba(255, 255, 255, 0.96);
+}
+
+.identity-auth-description {
+  color: rgba(241, 245, 249, 0.82);
+}
+
+.identity-auth-shell[data-theme='light'] .identity-auth-description {
+  color: rgba(29, 41, 57, 0.78);
+}
+
+.identity-auth-form {
+  display: grid;
+  gap: 1rem;
+}
+
+.identity-auth-card h1,
+.identity-auth-card h2,
+.identity-auth-card h3 {
+  color: inherit;
+}
+
+.identity-auth-title {
+  margin: 0;
+  font-size: 1.2rem;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.identity-auth-section-note {
+  line-height: 1.45;
+  font-size: 0.92rem;
+}
+
+.identity-auth-alert {
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 0.625rem;
+  padding: 0.75rem 0.85rem;
+  color: #e2e8f0;
+  background: rgba(15, 23, 42, 0.45);
+}
+
+.identity-auth-shell[data-theme='light'] .identity-auth-alert {
+  color: #1f2937;
+  background: rgba(15, 23, 42, 0.05);
+}
+
+.identity-auth-alert--success {
+  border-color: rgba(16, 185, 129, 0.45);
+  background: rgba(16, 185, 129, 0.13);
+}
+
+.identity-auth-alert--warn {
+  border-color: rgba(245, 158, 11, 0.5);
+  background: rgba(245, 158, 11, 0.14);
+}
+
+.identity-auth-alert--info {
+  border-color: rgba(59, 130, 246, 0.4);
+  background: rgba(59, 130, 246, 0.13);
+}
+
+.identity-auth-compact {
+  max-width: 24rem;
+}
+
+@media (max-width: 767px) {
+  .identity-auth-shell {
+    align-items: start;
+    padding-top: 2.5rem;
+  }
+
+  .identity-auth-card {
+    max-width: 100%;
+  }
+}
+
 @media (max-width: 860px) {
   .identity-nav,
   .identity-hero,
