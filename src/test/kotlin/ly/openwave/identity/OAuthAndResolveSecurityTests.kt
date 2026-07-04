@@ -246,6 +246,38 @@ class OAuthAndResolveSecurityTests {
     }
 
     @Test
+    fun `refresh reuse revokes only the replayed delegated grant family`() {
+        val secret = createConfidentialClient(
+            scopes = listOf("openwave:owner.ops.read"),
+            redirectUris = listOf("https://client.example.test/callback")
+        )
+        val verifierOne = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~one"
+        val verifierTwo = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~two"
+        val firstCode = approvedAuthorizationCode(pkceChallenge(verifierOne))
+        val secondCode = approvedAuthorizationCode(pkceChallenge(verifierTwo))
+        val firstTokens = exchangeAuthorizationCodePair(secret, firstCode, verifierOne)
+        val secondTokens = exchangeAuthorizationCodePair(secret, secondCode, verifierTwo)
+
+        val rotatedFirst = refresh(firstTokens.second, CLIENT_ID, secret)
+
+        introspectActive(secret, rotatedFirst.first, expectedActive = true)
+        introspectActive(secret, secondTokens.first, expectedActive = true)
+
+        mockMvc.perform(
+            post("/oauth/token")
+                .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                .param("grant_type", "refresh_token")
+                .param("client_id", CLIENT_ID)
+                .param("client_secret", secret)
+                .param("refresh_token", firstTokens.second)
+        ).andExpect(status().isUnauthorized)
+
+        introspectActive(secret, rotatedFirst.first, expectedActive = false)
+        introspectActive(secret, secondTokens.first, expectedActive = true)
+        refresh(secondTokens.second, CLIENT_ID, secret)
+    }
+
+    @Test
     fun `token endpoint rejects oversized payload values`() {
         val secret = createConfidentialClient(scopes = listOf("identity:registry.read"))
         val oversizedScope = "identity:registry.read ".repeat(30)
@@ -345,6 +377,24 @@ class OAuthAndResolveSecurityTests {
                 .param("code", "owac_${"d".repeat(43)}!!!!")
                 .param("redirect_uri", "https://client.example.test/callback")
                 .param("code_verifier", verifier)
+        ).andExpect(status().isBadRequest)
+    }
+
+    @Test
+    fun `oauth consent request paths reject malformed request ids before lookup`() {
+        mockMvc.perform(
+            get("/oauth/consent-requests/{requestId}", "not-a-request")
+                .header("X-OpenWave-Registry-Key", "test-admin-key")
+        ).andExpect(status().isBadRequest)
+
+        mockMvc.perform(
+            post("/oauth/consent-requests/{requestId}/approve", "owar_short")
+                .header("X-OpenWave-Registry-Key", "test-admin-key")
+        ).andExpect(status().isBadRequest)
+
+        mockMvc.perform(
+            post("/oauth/consent-requests/{requestId}/reject", "owar_${"a".repeat(24)}!!!!")
+                .header("X-OpenWave-Registry-Key", "test-admin-key")
         ).andExpect(status().isBadRequest)
     }
 
@@ -686,6 +736,22 @@ class OAuthAndResolveSecurityTests {
                 .param("client_id", CLIENT_ID)
                 .param("client_secret", secret)
                 .param("scope", scope)
+        ).andExpect(status().isOk)
+            .andReturn().response.contentAsString
+        val node = objectMapper.readTree(response)
+        return node.get("access_token").asText() to node.get("refresh_token").asText()
+    }
+
+    private fun exchangeAuthorizationCodePair(secret: String, code: String, verifier: String): Pair<String, String> {
+        val response = mockMvc.perform(
+            post("/oauth/token")
+                .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                .param("grant_type", "authorization_code")
+                .param("client_id", CLIENT_ID)
+                .param("client_secret", secret)
+                .param("code", code)
+                .param("redirect_uri", "https://client.example.test/callback")
+                .param("code_verifier", verifier)
         ).andExpect(status().isOk)
             .andReturn().response.contentAsString
         val node = objectMapper.readTree(response)

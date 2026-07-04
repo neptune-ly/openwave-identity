@@ -45,8 +45,10 @@ class OpenWaveOAuthService(
     private val authorizationRequestCleanupCooldownMs = 60_000L
     private val pkceCodeChallengeS256Pattern = Regex("^[A-Za-z0-9_-]{43}$")
     private val pkceVerifierPattern = Regex("^[A-Za-z0-9\\-._~]{43,128}$")
+    private val authorizationRequestBodyLength = 24 // Base64url without padding for 18 random bytes.
     private val opaqueTokenBodyLength = 54 // Base64url without padding for 40 random bytes.
     private val authorizationCodeBodyLength = 43 // Base64url without padding for 32 random bytes.
+    private val authorizationRequestPattern = Regex("^owar_[A-Za-z0-9_-]{$authorizationRequestBodyLength}$")
     private val accessTokenPattern = Regex("^owat_[A-Za-z0-9_-]{$opaqueTokenBodyLength}$")
     private val refreshTokenPattern = Regex("^owrt_[A-Za-z0-9_-]{$opaqueTokenBodyLength}$")
     private val authorizationCodePattern = Regex("^owac_[A-Za-z0-9_-]{$authorizationCodeBodyLength}$")
@@ -223,6 +225,7 @@ class OpenWaveOAuthService(
 
     @Transactional
     fun consentRequest(requestId: String, authentication: Authentication?): Map<String, Any?> {
+        validateTokenShape(requestId, "request_id", authorizationRequestPattern)
         val req = authorizationRequests.findById(requestId).orElseThrow {
             ResponseStatusException(HttpStatus.NOT_FOUND, "OAuth consent request not found")
         }
@@ -238,6 +241,7 @@ class OpenWaveOAuthService(
 
     @Transactional
     fun approveConsentRequest(requestId: String, authentication: Authentication?): Map<String, Any?> {
+        validateTokenShape(requestId, "request_id", authorizationRequestPattern)
         val req = authorizationRequests.findById(requestId).orElseThrow {
             ResponseStatusException(HttpStatus.NOT_FOUND, "OAuth consent request not found")
         }
@@ -286,6 +290,7 @@ class OpenWaveOAuthService(
 
     @Transactional
     fun rejectConsentRequest(requestId: String, authentication: Authentication?): Map<String, Any?> {
+        validateTokenShape(requestId, "request_id", authorizationRequestPattern)
         val req = authorizationRequests.findById(requestId).orElseThrow {
             ResponseStatusException(HttpStatus.NOT_FOUND, "OAuth consent request not found")
         }
@@ -568,11 +573,13 @@ class OpenWaveOAuthService(
         // either the legitimate client retried after a lost response OR a leaked token is being
         // replayed in parallel with the legitimate descendant. We cannot tell the two apart, so
         // we fail closed AND revoke the whole active token family for that client — invalidating
-        // the attacker's stolen descendant as well. The happy path (a still-active refresh token)
-        // is unaffected.
+        // the attacker's stolen descendant as well. The family is scoped to the delegated grant
+        // when present, or to the matching client subject for client credentials, so
+        // unrelated grants for the same client keep working. The happy path (a still-active
+        // refresh token) is unaffected.
         if (row.revokedAt != null) {
             if (row.revokeReason == "refresh_rotated") {
-                revokeActiveTokenFamily(row.clientId, "refresh_reuse_detected")
+                revokeActiveTokenFamily(row, "refresh_reuse_detected")
             }
             throw ResponseStatusException(HttpStatus.UNAUTHORIZED, "Refresh token expired or revoked")
         }
@@ -590,13 +597,19 @@ class OpenWaveOAuthService(
     }
 
     /**
-     * Revokes every still-active token for a client. Used as the fail-closed response to refresh
-     * token reuse: when a rotated (single-use) refresh token is replayed, the entire active token
-     * family is invalidated so a leaked descendant cannot continue to be used.
+     * Revokes every still-active token in the same token family. Used as the fail-closed response
+     * to refresh token reuse: when a rotated (single-use) refresh token is replayed, the active
+     * descendants for that same delegated grant or client subject are invalidated so a leaked
+     * descendant cannot continue to be used.
      */
-    private fun revokeActiveTokenFamily(clientId: String, reason: String) {
+    private fun revokeActiveTokenFamily(source: OAuthTokenEntity, reason: String) {
         val now = Instant.now()
-        val active = tokens.findAllByClientIdAndRevokedAtIsNull(clientId)
+        val active = source.grantId?.let { grantId ->
+            tokens.findAllByClientIdAndGrantIdAndRevokedAtIsNull(source.clientId, grantId)
+        } ?: tokens.findAllByClientIdAndSubjectAndRevokedAtIsNull(
+            source.clientId,
+            source.subject
+        )
         if (active.isEmpty()) return
         active.forEach {
             it.revokedAt = now
