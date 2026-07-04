@@ -45,6 +45,9 @@ class OpenWaveOAuthService(
     private val authorizationRequestCleanupCooldownMs = 60_000L
     private val pkceCodeChallengeS256Pattern = Regex("^[A-Za-z0-9_-]{43}$")
     private val pkceVerifierPattern = Regex("^[A-Za-z0-9\\-._~]{43,128}$")
+    private val accessTokenPattern = Regex("^owat_[A-Za-z0-9_-]+$")
+    private val refreshTokenPattern = Regex("^owrt_[A-Za-z0-9_-]+$")
+    private val authorizationCodePattern = Regex("^owac_[A-Za-z0-9_-]+$")
     private val maxClientIdLength = 80
     private val maxClientSecretLength = 512
     private val maxRequestIdLength = 200
@@ -480,6 +483,7 @@ class OpenWaveOAuthService(
         validateRequiredField(code, "code", maxCodeLength)
         validateRequiredField(redirectUri, "redirect_uri", maxRedirectUriLength)
         validateRequiredField(codeVerifier, "code_verifier", maxCodeLength, minLength = 43)
+        validateTokenShape(code, "code", authorizationCodePattern)
 
         ensureSettings()
         requireSetting("oauth.global")
@@ -546,6 +550,7 @@ class OpenWaveOAuthService(
         validateOptionalField(clientId, "client_id", maxClientIdLength)
         validateOptionalField(clientSecret, "client_secret", maxClientSecretLength)
         validateOptionalField(scopeText, "scope", maxScopeTextLength)
+        validateTokenShape(refreshToken, "refresh_token", refreshTokenPattern)
 
         ensureSettings()
         requireSetting("oauth.global")
@@ -645,8 +650,13 @@ class OpenWaveOAuthService(
     @Transactional
     fun revoke(token: String, client: OAuthClientEntity? = null): Map<String, Any?> {
         validateRequiredField(token, "token", maxTokenLength)
+        validateRevocableTokenShape(token)
         val hash = sha256(token)
-        val row = tokens.findByTokenHash(hash) ?: tokens.findByRefreshTokenHash(hash) ?: return mapOf("revoked" to true)
+        val row = when {
+            accessTokenPattern.matches(token) -> tokens.findByTokenHash(hash)
+            refreshTokenPattern.matches(token) -> tokens.findByRefreshTokenHash(hash)
+            else -> null
+        } ?: return mapOf("revoked" to true)
         // RFC 7009: a client may only revoke tokens it owns. When an authenticated client is
         // supplied, silently no-op (return success without revoking) for tokens it does not own,
         // so the endpoint does not become a token-existence oracle for other clients' tokens.
@@ -662,6 +672,7 @@ class OpenWaveOAuthService(
     fun introspect(token: String, requiredAudience: String? = null, caller: OAuthClientEntity): Map<String, Any?> {
         validateRequiredField(token, "token", maxTokenLength)
         validateOptionalField(requiredAudience, "audience", maxAudienceLength)
+        validateTokenShape(token, "token", accessTokenPattern)
         ensureSettings()
         val row = tokens.findByTokenHash(sha256(token)) ?: return mapOf("active" to false)
         val client = clients.findByClientId(row.clientId)
@@ -793,6 +804,18 @@ class OpenWaveOAuthService(
     private fun validateOptionalField(value: String?, fieldName: String, maxLength: Int) {
         if (value != null && value.length > maxLength) {
             throw ResponseStatusException(HttpStatus.BAD_REQUEST, "$fieldName is too long")
+        }
+    }
+
+    private fun validateTokenShape(value: String, fieldName: String, pattern: Regex) {
+        if (!pattern.matches(value)) {
+            throw ResponseStatusException(HttpStatus.BAD_REQUEST, "$fieldName is invalid")
+        }
+    }
+
+    private fun validateRevocableTokenShape(value: String) {
+        if (!accessTokenPattern.matches(value) && !refreshTokenPattern.matches(value)) {
+            throw ResponseStatusException(HttpStatus.BAD_REQUEST, "token is invalid")
         }
     }
 

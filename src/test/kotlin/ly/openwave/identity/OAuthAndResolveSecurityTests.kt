@@ -304,6 +304,51 @@ class OAuthAndResolveSecurityTests {
     }
 
     @Test
+    fun `oauth token paths reject malformed token shapes before lookup`() {
+        val secret = createConfidentialClient(
+            scopes = listOf("identity:registry.read", "openwave:owner.ops.read"),
+            redirectUris = listOf("https://client.example.test/callback")
+        )
+        val verifier = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~shape"
+
+        mockMvc.perform(
+            post("/oauth/introspect")
+                .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                .param("token", "owat_${"a".repeat(43)}!!!!")
+                .param("client_id", CLIENT_ID)
+                .param("client_secret", secret)
+        ).andExpect(status().isBadRequest)
+
+        mockMvc.perform(
+            post("/oauth/revoke")
+                .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                .param("token", "owrt_${"b".repeat(43)}!!!!")
+                .param("client_id", CLIENT_ID)
+                .param("client_secret", secret)
+        ).andExpect(status().isBadRequest)
+
+        mockMvc.perform(
+            post("/oauth/token")
+                .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                .param("grant_type", "refresh_token")
+                .param("client_id", CLIENT_ID)
+                .param("client_secret", secret)
+                .param("refresh_token", "owrt_${"c".repeat(43)}!!!!")
+        ).andExpect(status().isBadRequest)
+
+        mockMvc.perform(
+            post("/oauth/token")
+                .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                .param("grant_type", "authorization_code")
+                .param("client_id", CLIENT_ID)
+                .param("client_secret", secret)
+                .param("code", "owac_${"d".repeat(43)}!!!!")
+                .param("redirect_uri", "https://client.example.test/callback")
+                .param("code_verifier", verifier)
+        ).andExpect(status().isBadRequest)
+    }
+
+    @Test
     fun `authorization code with PKCE exchanges once and rejects replay`() {
         val secret = createConfidentialClient(
             scopes = listOf("openwave:owner.ops.read"),
