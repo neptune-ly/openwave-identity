@@ -73,7 +73,7 @@ class ResolutionController(
     private fun clientIp(request: HttpServletRequest): String {
         val forwarded = request.getHeader("X-Forwarded-For")
         if (!forwarded.isNullOrBlank()) {
-            return forwarded.substringBefore(',').trim()
+            return forwarded.split(",").last().trim().ifBlank { "unknown" }
         }
         return request.remoteAddr ?: "unknown"
     }

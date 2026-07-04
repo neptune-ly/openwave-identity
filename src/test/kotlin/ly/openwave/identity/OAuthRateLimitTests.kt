@@ -80,4 +80,24 @@ class OAuthRateLimitTests {
         ).andExpect(status().isTooManyRequests)
             .andExpect(jsonPath("$.code").value("RATE_LIMITED"))
     }
+
+    @Test
+    fun `oauth rate limit keys on the proxy-appended forwarded address`() {
+        val actualClientIp = "203.0.113.55"
+
+        mockMvc.perform(
+            post("/oauth/token")
+                .header("X-Forwarded-For", "198.51.100.10, $actualClientIp")
+                .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                .param("grant_type", "client_credentials")
+        ).andExpect(status().isBadRequest)
+
+        mockMvc.perform(
+            post("/oauth/token")
+                .header("X-Forwarded-For", "198.51.100.11, $actualClientIp")
+                .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                .param("grant_type", "client_credentials")
+        ).andExpect(status().isTooManyRequests)
+            .andExpect(jsonPath("$.code").value("RATE_LIMITED"))
+    }
 }
