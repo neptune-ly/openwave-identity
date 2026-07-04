@@ -13,6 +13,7 @@ import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 
 @RestController
 class ResolutionController(
@@ -88,27 +89,56 @@ class ResolutionController(
  * Per-process only; for multi-instance deployments place a shared limiter (gateway/WAF)
  * in front. Counters are reset lazily as windows roll over.
  */
-class RateLimiter(private val windowMillis: Long) {
+class RateLimiter(private val windowMillis: Long, private val maxEntries: Int = 10_000) {
     private data class Counter(val windowStart: Long, val count: AtomicInteger)
 
     private val counters = ConcurrentHashMap<String, Counter>()
+    private val nextPruneMs = AtomicLong(0)
 
     fun tryAcquire(key: String, limit: Int): Boolean {
         val now = System.currentTimeMillis()
+        val boundedKey = key.take(240)
         while (true) {
-            val existing = counters[key]
+            val existing = counters[boundedKey]
             if (existing == null || now - existing.windowStart >= windowMillis) {
+                if (counters.size >= maxEntries.coerceAtLeast(1) && existing == null) {
+                    pruneIfNeeded(now)
+                    if (counters.size >= maxEntries.coerceAtLeast(1)) {
+                        return false
+                    }
+                }
                 val fresh = Counter(now, AtomicInteger(1))
                 // Reset (or create) the window atomically; retry if another thread raced us.
                 if (existing == null) {
-                    if (counters.putIfAbsent(key, fresh) == null) return true
+                    if (counters.putIfAbsent(boundedKey, fresh) == null) return true
                 } else {
-                    if (counters.replace(key, existing, fresh)) return true
+                    if (counters.replace(boundedKey, existing, fresh)) return true
                 }
                 continue
             }
             return existing.count.incrementAndGet() <= limit
         }
+    }
+
+    private fun pruneIfNeeded(now: Long) {
+        val max = maxEntries.coerceAtLeast(1)
+        if (counters.size < max) return
+        val next = nextPruneMs.get()
+        if (now < next) return
+        if (!nextPruneMs.compareAndSet(next, now + windowMillis)) return
+
+        counters.entries
+            .asSequence()
+            .filter { now - it.value.windowStart >= windowMillis }
+            .forEach { counters.remove(it.key, it.value) }
+
+        if (counters.size < max) return
+        val overflow = counters.size - max + 1
+        counters.entries
+            .asSequence()
+            .sortedBy { it.value.windowStart }
+            .take(overflow)
+            .forEach { counters.remove(it.key, it.value) }
     }
 }
 

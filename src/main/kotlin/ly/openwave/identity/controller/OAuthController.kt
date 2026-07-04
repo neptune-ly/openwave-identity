@@ -1,6 +1,8 @@
 package ly.openwave.identity.controller
 
 import jakarta.servlet.http.HttpServletRequest
+import ly.openwave.identity.config.OAuthProperties
+import ly.openwave.identity.exception.RateLimitExceededException
 import ly.openwave.identity.service.CreateOAuthClientRequest
 import ly.openwave.identity.service.OpenWaveOAuthService
 import ly.openwave.identity.service.UpdateOAuthClientRequest
@@ -15,8 +17,13 @@ import java.util.Base64
 
 @RestController
 class OAuthController(
-    private val oauth: OpenWaveOAuthService
+    private val oauth: OpenWaveOAuthService,
+    private val props: OAuthProperties
 ) {
+    private val tokenWindow = RateLimiter(windowMillis = 60_000, maxEntries = props.rateLimitMaxEntries)
+    private val introspectionWindow = RateLimiter(windowMillis = 60_000, maxEntries = props.rateLimitMaxEntries)
+    private val revocationWindow = RateLimiter(windowMillis = 60_000, maxEntries = props.rateLimitMaxEntries)
+
     @GetMapping("/.well-known/openid-configuration")
     fun openIdConfiguration(request: HttpServletRequest): Map<String, Any?> =
         oauth.discovery(baseUrl(request))
@@ -73,6 +80,7 @@ class OAuthController(
         val basic = basicClientCredentials(request)
         val clientId = basic?.first ?: clientIdParam
         val clientSecret = basic?.second ?: clientSecretParam
+        enforceOAuthRateLimit(request, tokenWindow, "token", clientId, props.tokenRateLimitPerMinute)
         val issued = when (grantType) {
             "client_credentials" -> oauth.issueClientCredentials(
                 clientId = clientId ?: throw ResponseStatusException(HttpStatus.BAD_REQUEST, "client_id is required"),
@@ -114,8 +122,10 @@ class OAuthController(
         @RequestParam("audience", required = false) audience: String?
     ): Map<String, Any?> {
         val basic = basicClientCredentials(request)
+        val clientId = basic?.first ?: clientIdParam
+        enforceOAuthRateLimit(request, introspectionWindow, "introspect", clientId, props.introspectionRateLimitPerMinute)
         // RFC 7662 §2.1: the introspection endpoint MUST require authentication.
-        val client = oauth.authenticateClient(basic?.first ?: clientIdParam, basic?.second ?: clientSecretParam)
+        val client = oauth.authenticateClient(clientId, basic?.second ?: clientSecretParam)
         return oauth.introspect(token, audience, client)
     }
 
@@ -127,9 +137,11 @@ class OAuthController(
         @RequestParam("client_secret", required = false) clientSecretParam: String?
     ): Map<String, Any?> {
         val basic = basicClientCredentials(request)
+        val clientId = basic?.first ?: clientIdParam
+        enforceOAuthRateLimit(request, revocationWindow, "revoke", clientId, props.revocationRateLimitPerMinute)
         // RFC 7009 §2.1: the revocation endpoint MUST require client authentication,
         // and a client may only revoke its own tokens.
-        val client = oauth.authenticateClient(basic?.first ?: clientIdParam, basic?.second ?: clientSecretParam)
+        val client = oauth.authenticateClient(clientId, basic?.second ?: clientSecretParam)
         return oauth.revoke(token, client)
     }
 
@@ -224,5 +236,28 @@ class OAuthController(
         val index = decoded.indexOf(':')
         if (index <= 0) return null
         return decoded.substring(0, index) to decoded.substring(index + 1)
+    }
+
+    private fun enforceOAuthRateLimit(
+        request: HttpServletRequest,
+        window: RateLimiter,
+        endpoint: String,
+        clientId: String?,
+        limit: Int
+    ) {
+        if (limit <= 0) return
+        val key = listOf(endpoint, clientIp(request), clientId?.take(100)?.ifBlank { "anonymous" } ?: "anonymous")
+            .joinToString(":")
+        if (!window.tryAcquire(key, limit)) {
+            throw RateLimitExceededException("OAuth $endpoint rate limit exceeded for this client")
+        }
+    }
+
+    private fun clientIp(request: HttpServletRequest): String {
+        val forwarded = request.getHeader("X-Forwarded-For")
+        if (!forwarded.isNullOrBlank()) {
+            return forwarded.substringBefore(',').trim().ifBlank { "unknown" }
+        }
+        return request.remoteAddr ?: "unknown"
     }
 }
