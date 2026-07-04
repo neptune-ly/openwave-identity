@@ -181,7 +181,7 @@ class OAuthAndResolveSecurityTests {
                 .queryParam("scope", "openwave:owner.ops.read")
                 .queryParam("code_challenge", "X5F6V8fA1xNfW3aZ2M0x8Wf4rL8j7vR6Qw3bV7u8x4Y")
                 .queryParam("code_challenge_method", " S256 ")
-        ).andExpect(status().isFound)
+        ).andExpect(status().isBadRequest)
     }
 
     @Test
@@ -246,6 +246,31 @@ class OAuthAndResolveSecurityTests {
     }
 
     @Test
+    fun `token endpoint rejects oversized payload values`() {
+        val secret = createConfidentialClient(scopes = listOf("identity:registry.read"))
+        val oversizedScope = "identity:registry.read ".repeat(30)
+
+        mockMvc.perform(
+            post("/oauth/token")
+                .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                .param("grant_type", "refresh_token")
+                .param("client_id", CLIENT_ID)
+                .param("client_secret", secret)
+                .param("refresh_token", "a".repeat(5000))
+                .param("scope", "scope")
+        ).andExpect(status().isBadRequest)
+
+        mockMvc.perform(
+            post("/oauth/token")
+                .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                .param("grant_type", "client_credentials")
+                .param("client_id", CLIENT_ID)
+                .param("client_secret", secret)
+                .param("scope", oversizedScope)
+        ).andExpect(status().isBadRequest)
+    }
+
+    @Test
     fun `refresh token is bound to the issuing client`() {
         val secret = createConfidentialClient(scopes = listOf("identity:registry.read"))
         val otherSecret = createConfidentialClient(
@@ -262,6 +287,20 @@ class OAuthAndResolveSecurityTests {
                 .param("client_secret", otherSecret)
                 .param("refresh_token", refreshToken)
         ).andExpect(status().isUnauthorized)
+    }
+
+    @Test
+    fun `introspect endpoint rejects oversized token`() {
+        val secret = createConfidentialClient(scopes = listOf("identity:registry.read"))
+        issueToken(secret, "identity:registry.read")
+
+        mockMvc.perform(
+            post("/oauth/introspect")
+                .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                .param("token", "b".repeat(5000))
+                .param("client_id", CLIENT_ID)
+                .param("client_secret", secret)
+        ).andExpect(status().isBadRequest)
     }
 
     @Test

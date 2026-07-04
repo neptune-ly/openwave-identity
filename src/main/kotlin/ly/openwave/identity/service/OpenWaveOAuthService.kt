@@ -45,6 +45,16 @@ class OpenWaveOAuthService(
     private val authorizationRequestCleanupCooldownMs = 60_000L
     private val pkceCodeChallengeS256Pattern = Regex("^[A-Za-z0-9_-]{43}$")
     private val pkceVerifierPattern = Regex("^[A-Za-z0-9\\-._~]{43,128}$")
+    private val maxClientIdLength = 80
+    private val maxClientSecretLength = 512
+    private val maxRequestIdLength = 200
+    private val maxRedirectUriLength = 2048
+    private val maxScopeTextLength = 512
+    private val maxCodeLength = 320
+    private val maxAudienceLength = 80
+    private val maxEnvironmentTextLength = 24
+    private val maxStateLength = 500
+    private val maxTokenLength = 2048
 
     private val knownSettings = listOf(
         "oauth.global" to false,
@@ -85,6 +95,7 @@ class OpenWaveOAuthService(
     fun createClient(req: CreateOAuthClientRequest, authentication: Authentication?): Map<String, Any?> {
         ensureSettings()
         val clientId = req.clientId?.takeIf { it.isNotBlank() } ?: "owc_${randomToken(18)}"
+        validateRequiredField(clientId, "client_id", maxClientIdLength)
         if (clients.existsByClientId(clientId)) {
             throw ResponseStatusException(HttpStatus.CONFLICT, "OAuth client already exists")
         }
@@ -128,11 +139,21 @@ class OpenWaveOAuthService(
         audience: String?,
         environmentText: String?
     ): Map<String, Any?> {
+        validateRequiredField(clientId, "client_id", maxClientIdLength)
+        validateRequiredField(redirectUri, "redirect_uri", maxRedirectUriLength)
+        validateRequiredField(responseType, "response_type", 20)
+        validateOptionalField(scopeText, "scope", maxScopeTextLength)
+        validateRequiredField(codeChallenge, "code_challenge", maxLength = 320, minLength = 43)
+        validateOptionalField(codeChallengeMethod, "code_challenge_method", 20)
+        validateOptionalField(state, "state", maxStateLength)
+        validateOptionalField(audience, "audience", maxAudienceLength)
+        validateOptionalField(environmentText, "environment", maxEnvironmentTextLength)
+
         ensureSettings()
         requireSetting("oauth.global")
         purgeExpiredAuthorizationRequests()
         if (responseType != "code") throw ResponseStatusException(HttpStatus.BAD_REQUEST, "response_type must be code")
-        if ((codeChallengeMethod ?: "S256").trim() != "S256") {
+        if ((codeChallengeMethod ?: "S256") != "S256") {
             throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Only PKCE S256 is supported")
         }
         if (codeChallenge.isBlank()) throw ResponseStatusException(HttpStatus.BAD_REQUEST, "code_challenge is required")
@@ -398,6 +419,12 @@ class OpenWaveOAuthService(
         audience: String?,
         environmentText: String?
     ): OAuthTokenIssueResult {
+        validateRequiredField(clientId, "client_id", maxClientIdLength)
+        validateOptionalField(clientSecret, "client_secret", maxClientSecretLength)
+        validateOptionalField(scopeText, "scope", maxScopeTextLength)
+        validateOptionalField(audience, "audience", maxAudienceLength)
+        validateOptionalField(environmentText, "environment", maxEnvironmentTextLength)
+
         ensureSettings()
         requireSetting("oauth.global")
         val client = clients.findByClientId(clientId) ?: throw ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid client")
@@ -448,6 +475,12 @@ class OpenWaveOAuthService(
         redirectUri: String,
         codeVerifier: String
     ): OAuthTokenIssueResult {
+        validateRequiredField(clientId, "client_id", maxClientIdLength)
+        validateOptionalField(clientSecret, "client_secret", maxClientSecretLength)
+        validateRequiredField(code, "code", maxCodeLength)
+        validateRequiredField(redirectUri, "redirect_uri", maxRedirectUriLength)
+        validateRequiredField(codeVerifier, "code_verifier", maxCodeLength, minLength = 43)
+
         ensureSettings()
         requireSetting("oauth.global")
         val client = authenticateClient(clientId, clientSecret)
@@ -509,6 +542,11 @@ class OpenWaveOAuthService(
     // nothing, so suppressing rollback for them is harmless.
     @Transactional(noRollbackFor = [ResponseStatusException::class])
     fun refresh(refreshToken: String, clientId: String?, clientSecret: String?, scopeText: String?): OAuthTokenIssueResult {
+        validateRequiredField(refreshToken, "refresh_token", maxTokenLength)
+        validateOptionalField(clientId, "client_id", maxClientIdLength)
+        validateOptionalField(clientSecret, "client_secret", maxClientSecretLength)
+        validateOptionalField(scopeText, "scope", maxScopeTextLength)
+
         ensureSettings()
         requireSetting("oauth.global")
         val row = tokens.findByRefreshTokenHash(sha256(refreshToken))
@@ -596,6 +634,8 @@ class OpenWaveOAuthService(
         if (clientId.isNullOrBlank()) {
             throw ResponseStatusException(HttpStatus.UNAUTHORIZED, "Client authentication required")
         }
+        validateRequiredField(clientId, "client_id", maxClientIdLength)
+        validateOptionalField(clientSecret, "client_secret", maxClientSecretLength)
         val client = clients.findByClientId(clientId)
             ?: throw ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid client credentials")
         validateClientSecret(client, clientSecret)
@@ -604,6 +644,7 @@ class OpenWaveOAuthService(
 
     @Transactional
     fun revoke(token: String, client: OAuthClientEntity? = null): Map<String, Any?> {
+        validateRequiredField(token, "token", maxTokenLength)
         val hash = sha256(token)
         val row = tokens.findByTokenHash(hash) ?: tokens.findByRefreshTokenHash(hash) ?: return mapOf("revoked" to true)
         // RFC 7009: a client may only revoke tokens it owns. When an authenticated client is
@@ -619,6 +660,8 @@ class OpenWaveOAuthService(
     }
 
     fun introspect(token: String, requiredAudience: String? = null, caller: OAuthClientEntity): Map<String, Any?> {
+        validateRequiredField(token, "token", maxTokenLength)
+        validateOptionalField(requiredAudience, "audience", maxAudienceLength)
         ensureSettings()
         val row = tokens.findByTokenHash(sha256(token)) ?: return mapOf("active" to false)
         val client = clients.findByClientId(row.clientId)
@@ -740,6 +783,18 @@ class OpenWaveOAuthService(
 
     private fun parseScopeText(scopeText: String?): Set<String> =
         scopeText?.split(" ", ",")?.map { it.trim() }?.filter { it.isNotBlank() }?.toSet() ?: emptySet()
+
+    private fun validateRequiredField(value: String?, fieldName: String, maxLength: Int, minLength: Int = 1) {
+        if (value.isNullOrBlank() || value.length < minLength || value.length > maxLength) {
+            throw ResponseStatusException(HttpStatus.BAD_REQUEST, "$fieldName is invalid")
+        }
+    }
+
+    private fun validateOptionalField(value: String?, fieldName: String, maxLength: Int) {
+        if (value != null && value.length > maxLength) {
+            throw ResponseStatusException(HttpStatus.BAD_REQUEST, "$fieldName is too long")
+        }
+    }
 
     private fun parseJsonList(value: String): List<String> =
         runCatching { json.readValue(value, Array<String>::class.java).toList() }
