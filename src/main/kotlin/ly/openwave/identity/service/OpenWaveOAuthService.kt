@@ -123,6 +123,7 @@ class OpenWaveOAuthService(
     ): Map<String, Any?> {
         ensureSettings()
         requireSetting("oauth.global")
+        purgeExpiredAuthorizationRequests()
         if (responseType != "code") throw ResponseStatusException(HttpStatus.BAD_REQUEST, "response_type must be code")
         if ((codeChallengeMethod ?: "S256") != "S256") {
             throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Only PKCE S256 is supported")
@@ -162,6 +163,12 @@ class OpenWaveOAuthService(
             "consent_url" to "/portal/oauth-consent?request_id=${urlEncode(request.requestId)}",
             "expires_at" to request.requestExpiresAt
         )
+    }
+
+    private fun purgeExpiredAuthorizationRequests() {
+        runCatching {
+            authorizationRequests.deleteExpired(Instant.now())
+        }
     }
 
     @Transactional
