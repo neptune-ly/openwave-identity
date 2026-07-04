@@ -100,4 +100,72 @@ class OAuthRateLimitTests {
         ).andExpect(status().isTooManyRequests)
             .andExpect(jsonPath("$.code").value("RATE_LIMITED"))
     }
+
+    @Test
+    fun `oauth ip rate limit is not bypassed by rotating client ids`() {
+        val tokenIp = "203.0.113.66"
+
+        mockMvc.perform(
+            post("/oauth/token")
+                .header("X-Forwarded-For", tokenIp)
+                .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                .param("grant_type", "client_credentials")
+                .param("client_id", "owc_rotating_one")
+                .param("client_secret", "invalid-secret")
+                .param("scope", "identity:registry.read")
+        ).andExpect(status().is4xxClientError)
+
+        mockMvc.perform(
+            post("/oauth/token")
+                .header("X-Forwarded-For", tokenIp)
+                .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                .param("grant_type", "client_credentials")
+                .param("client_id", "owc_rotating_two")
+                .param("client_secret", "invalid-secret")
+                .param("scope", "identity:registry.read")
+        ).andExpect(status().isTooManyRequests)
+            .andExpect(jsonPath("$.code").value("RATE_LIMITED"))
+
+        val introspectionIp = "203.0.113.67"
+
+        mockMvc.perform(
+            post("/oauth/introspect")
+                .header("X-Forwarded-For", introspectionIp)
+                .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                .param("token", "owat_test")
+                .param("client_id", "owc_rotating_three")
+                .param("client_secret", "invalid-secret")
+        ).andExpect(status().is4xxClientError)
+
+        mockMvc.perform(
+            post("/oauth/introspect")
+                .header("X-Forwarded-For", introspectionIp)
+                .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                .param("token", "owat_test")
+                .param("client_id", "owc_rotating_four")
+                .param("client_secret", "invalid-secret")
+        ).andExpect(status().isTooManyRequests)
+            .andExpect(jsonPath("$.code").value("RATE_LIMITED"))
+
+        val revocationIp = "203.0.113.68"
+
+        mockMvc.perform(
+            post("/oauth/revoke")
+                .header("X-Forwarded-For", revocationIp)
+                .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                .param("token", "owat_test")
+                .param("client_id", "owc_rotating_five")
+                .param("client_secret", "invalid-secret")
+        ).andExpect(status().is4xxClientError)
+
+        mockMvc.perform(
+            post("/oauth/revoke")
+                .header("X-Forwarded-For", revocationIp)
+                .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                .param("token", "owat_test")
+                .param("client_id", "owc_rotating_six")
+                .param("client_secret", "invalid-secret")
+        ).andExpect(status().isTooManyRequests)
+            .andExpect(jsonPath("$.code").value("RATE_LIMITED"))
+    }
 }

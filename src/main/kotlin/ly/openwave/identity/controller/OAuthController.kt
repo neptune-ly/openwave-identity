@@ -20,6 +20,9 @@ class OAuthController(
     private val oauth: OpenWaveOAuthService,
     private val props: OAuthProperties
 ) {
+    private val tokenIpWindow = RateLimiter(windowMillis = 60_000, maxEntries = props.rateLimitMaxEntries)
+    private val introspectionIpWindow = RateLimiter(windowMillis = 60_000, maxEntries = props.rateLimitMaxEntries)
+    private val revocationIpWindow = RateLimiter(windowMillis = 60_000, maxEntries = props.rateLimitMaxEntries)
     private val tokenWindow = RateLimiter(windowMillis = 60_000, maxEntries = props.rateLimitMaxEntries)
     private val introspectionWindow = RateLimiter(windowMillis = 60_000, maxEntries = props.rateLimitMaxEntries)
     private val revocationWindow = RateLimiter(windowMillis = 60_000, maxEntries = props.rateLimitMaxEntries)
@@ -80,6 +83,7 @@ class OAuthController(
         val basic = basicClientCredentials(request)
         val clientId = basic?.first ?: clientIdParam
         val clientSecret = basic?.second ?: clientSecretParam
+        enforceOAuthIpRateLimit(request, tokenIpWindow, "token", props.tokenRateLimitPerMinute)
         enforceOAuthRateLimit(request, tokenWindow, "token", clientId, props.tokenRateLimitPerMinute)
         val issued = when (grantType) {
             "client_credentials" -> oauth.issueClientCredentials(
@@ -123,6 +127,7 @@ class OAuthController(
     ): Map<String, Any?> {
         val basic = basicClientCredentials(request)
         val clientId = basic?.first ?: clientIdParam
+        enforceOAuthIpRateLimit(request, introspectionIpWindow, "introspect", props.introspectionRateLimitPerMinute)
         enforceOAuthRateLimit(request, introspectionWindow, "introspect", clientId, props.introspectionRateLimitPerMinute)
         // RFC 7662 §2.1: the introspection endpoint MUST require authentication.
         val client = oauth.authenticateClient(clientId, basic?.second ?: clientSecretParam)
@@ -138,6 +143,7 @@ class OAuthController(
     ): Map<String, Any?> {
         val basic = basicClientCredentials(request)
         val clientId = basic?.first ?: clientIdParam
+        enforceOAuthIpRateLimit(request, revocationIpWindow, "revoke", props.revocationRateLimitPerMinute)
         enforceOAuthRateLimit(request, revocationWindow, "revoke", clientId, props.revocationRateLimitPerMinute)
         // RFC 7009 §2.1: the revocation endpoint MUST require client authentication,
         // and a client may only revoke its own tokens.
@@ -236,6 +242,19 @@ class OAuthController(
         val index = decoded.indexOf(':')
         if (index <= 0) return null
         return decoded.substring(0, index) to decoded.substring(index + 1)
+    }
+
+    private fun enforceOAuthIpRateLimit(
+        request: HttpServletRequest,
+        window: RateLimiter,
+        endpoint: String,
+        limit: Int
+    ) {
+        if (limit <= 0) return
+        val key = listOf(endpoint, clientIp(request)).joinToString(":")
+        if (!window.tryAcquire(key, limit)) {
+            throw RateLimitExceededException("OAuth $endpoint rate limit exceeded for this IP")
+        }
     }
 
     private fun enforceOAuthRateLimit(
