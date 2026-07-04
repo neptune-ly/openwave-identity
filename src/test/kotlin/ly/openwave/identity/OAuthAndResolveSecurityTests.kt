@@ -278,6 +278,31 @@ class OAuthAndResolveSecurityTests {
     }
 
     @Test
+    fun `grant revocation revokes only the selected delegated grant tokens`() {
+        val secret = createConfidentialClient(
+            scopes = listOf("openwave:owner.ops.read"),
+            redirectUris = listOf("https://client.example.test/callback")
+        )
+        val verifierOne = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~aaa"
+        val verifierTwo = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~bbb"
+        val firstCode = approvedAuthorizationCode(pkceChallenge(verifierOne))
+        val secondCode = approvedAuthorizationCode(pkceChallenge(verifierTwo))
+        val firstTokens = exchangeAuthorizationCodePair(secret, firstCode, verifierOne)
+        val secondTokens = exchangeAuthorizationCodePair(secret, secondCode, verifierTwo)
+        val firstGrantId = introspect(secret, firstTokens.first).get("grant_id").asLong()
+
+        mockMvc.perform(
+            post("/oauth/admin/grants/{grantId}/revoke", firstGrantId)
+                .header("X-OpenWave-Registry-Key", "test-admin-key")
+        ).andExpect(status().isOk)
+            .andExpect(jsonPath("$.revoked_tokens").value(1))
+
+        introspectActive(secret, firstTokens.first, expectedActive = false)
+        introspectActive(secret, secondTokens.first, expectedActive = true)
+        refresh(secondTokens.second, CLIENT_ID, secret)
+    }
+
+    @Test
     fun `token endpoint rejects oversized payload values`() {
         val secret = createConfidentialClient(scopes = listOf("identity:registry.read"))
         val oversizedScope = "identity:registry.read ".repeat(30)
@@ -781,6 +806,18 @@ class OAuthAndResolveSecurityTests {
                 .param("client_secret", secret)
         ).andExpect(status().isOk)
             .andExpect(jsonPath("$.active").value(expectedActive))
+    }
+
+    private fun introspect(secret: String, accessToken: String): JsonNode {
+        val response = mockMvc.perform(
+            post("/oauth/introspect")
+                .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                .param("token", accessToken)
+                .param("client_id", CLIENT_ID)
+                .param("client_secret", secret)
+        ).andExpect(status().isOk)
+            .andReturn().response.contentAsString
+        return objectMapper.readTree(response)
     }
 
     private fun approvedAuthorizationCode(challenge: String): String {

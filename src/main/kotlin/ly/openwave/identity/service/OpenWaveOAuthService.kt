@@ -411,8 +411,8 @@ class OpenWaveOAuthService(
             grant.revokedBy = authentication?.name ?: "system"
             grants.save(grant)
         }
-        val tokenRows = tokens.findAllBySubject(grant.subject).filter { it.clientId == grant.clientId }
-        tokenRows.filter { it.revokedAt == null }.forEach {
+        val tokenRows = tokens.findAllByGrantIdAndRevokedAtIsNull(grant.id)
+        tokenRows.forEach {
             it.revokedAt = now
             it.revokeReason = "grant_revoked"
         }

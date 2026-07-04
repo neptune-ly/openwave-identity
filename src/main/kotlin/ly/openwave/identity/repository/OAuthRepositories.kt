@@ -25,6 +25,7 @@ interface OAuthTokenRepository : JpaRepository<OAuthTokenEntity, Long> {
     fun findAllBySubject(subject: String): List<OAuthTokenEntity>
     fun findAllByClientIdAndRevokedAtIsNull(clientId: String): List<OAuthTokenEntity>
     fun findAllByClientIdAndGrantIdAndRevokedAtIsNull(clientId: String, grantId: Long): List<OAuthTokenEntity>
+    fun findAllByGrantIdAndRevokedAtIsNull(grantId: Long): List<OAuthTokenEntity>
     fun findAllByClientIdAndSubjectAndRevokedAtIsNull(
         clientId: String,
         subject: String
