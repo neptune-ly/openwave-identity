@@ -1,0 +1,175 @@
+# Deploy the OpenWave Identity SERVICE to the production VPS.
+#
+# The repository already had a workflow called "Deploy Pages" — it publishes
+# DOCUMENTATION to GitHub Pages and touches no running service. Until this file
+# existed, shipping the registry meant somebody SSH-ing in by hand, and there
+# was no record of who deployed what or whether it came back up.
+#
+# ## What this does NOT do
+#
+# It does not create infrastructure and it does not hold a database password.
+# The VPS layout, secrets and Compose files live in the Astro repo at
+# `deploy/hetzner` (see PRODUCTION_DEPLOYMENT.md). This workflow only performs
+# the operation an operator does today: pull, rebuild the identity container,
+# and then PROVE the thing that matters still answers.
+#
+# ## Why it verifies resolution and not just health
+#
+# On 2026-08-01 the alias surface returned HTTP 500 for every input for a full
+# day while `/actuator/health` reported UP the whole time, because the health
+# probe only asks whether the process is running. A staff tester was the
+# detection mechanism.
+#
+# So this deploy is not "green" because the container started. It is green only
+# when an anonymous alias lookup — the exact call that was broken — comes back
+# with a real answer or a clean 404. A 5xx fails the run.
+
+name: Deploy Service
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Branch, tag or SHA to deploy'
+        required: true
+        default: 'main'
+      probe_handle:
+        description: 'Handle used for the post-deploy resolution probe (any value; a 404 passes, a 5xx fails)'
+        required: true
+        default: 'deploy-probe-does-not-exist'
+
+# Never let two deploys touch the same host at once — a half-built image and a
+# `docker compose up` racing each other is how a VPS ends up serving neither
+# version.
+concurrency:
+  group: openwave-identity-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 30
+
+    steps:
+      - name: Check required secrets are present
+        env:
+          HOST: ${{ secrets.IDENTITY_DEPLOY_HOST }}
+          USER: ${{ secrets.IDENTITY_DEPLOY_USER }}
+          KEY: ${{ secrets.IDENTITY_DEPLOY_SSH_KEY }}
+          BASE: ${{ secrets.IDENTITY_PUBLIC_BASE_URL }}
+        run: |
+          missing=""
+          [ -n "$HOST" ] || missing="$missing IDENTITY_DEPLOY_HOST"
+          [ -n "$USER" ] || missing="$missing IDENTITY_DEPLOY_USER"
+          [ -n "$KEY" ]  || missing="$missing IDENTITY_DEPLOY_SSH_KEY"
+          [ -n "$BASE" ] || missing="$missing IDENTITY_PUBLIC_BASE_URL"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing repository secrets:$missing"
+            echo "Set them under Settings -> Secrets and variables -> Actions."
+            echo "IDENTITY_PUBLIC_BASE_URL is the https origin plus /v1, e.g. https://identity.example.com/v1"
+            exit 1
+          fi
+
+      - name: Configure SSH
+        env:
+          KEY: ${{ secrets.IDENTITY_DEPLOY_SSH_KEY }}
+          HOST: ${{ secrets.IDENTITY_DEPLOY_HOST }}
+          KNOWN_HOSTS: ${{ secrets.IDENTITY_DEPLOY_KNOWN_HOSTS }}
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          if [ -n "$KNOWN_HOSTS" ]; then
+            printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            # Pinning the host key is strongly preferred. Without
+            # IDENTITY_DEPLOY_KNOWN_HOSTS this falls back to trust-on-first-use,
+            # which cannot detect a substituted host — set the secret.
+            echo "::warning::IDENTITY_DEPLOY_KNOWN_HOSTS is not set; host key is not pinned."
+            ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          fi
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Pull and rebuild the identity service
+        env:
+          HOST: ${{ secrets.IDENTITY_DEPLOY_HOST }}
+          USER: ${{ secrets.IDENTITY_DEPLOY_USER }}
+          REF: ${{ inputs.ref }}
+        run: |
+          ssh -i ~/.ssh/id_deploy -o BatchMode=yes "$USER@$HOST" bash -seu <<EOSSH
+          # The Compose project lives in the Astro repo; the identity service is
+          # built from the sibling checkout (context: ../../../openwave-identity).
+          cd /opt/openwave/openwave-identity
+          git fetch --all --prune
+          git checkout --detach "$REF"
+          echo "identity now at: \$(git rev-parse --short HEAD) ($REF)"
+
+          cd /opt/openwave/neptune-astro/deploy/hetzner
+          # Only the identity service. Rebuilding everything would restart the
+          # Astro gateway and Caddy for a change that does not touch them.
+          docker compose up -d --build identity
+          docker compose ps identity
+          EOSSH
+
+      - name: Wait for the container to report healthy
+        env:
+          HOST: ${{ secrets.IDENTITY_DEPLOY_HOST }}
+          USER: ${{ secrets.IDENTITY_DEPLOY_USER }}
+        run: |
+          ssh -i ~/.ssh/id_deploy -o BatchMode=yes "$USER@$HOST" bash -seu <<'EOSSH'
+          cd /opt/openwave/neptune-astro/deploy/hetzner
+          cid=$(docker compose ps -q identity)
+          for i in $(seq 1 60); do
+            state=$(docker inspect -f '{{.State.Health.Status}}' "$cid" 2>/dev/null || echo unknown)
+            [ "$state" = "healthy" ] && { echo "container healthy after ${i}0s"; exit 0; }
+            [ "$state" = "unhealthy" ] && { echo "container reported UNHEALTHY"; docker compose logs --tail=120 identity; exit 1; }
+            sleep 10
+          done
+          echo "container never became healthy"
+          docker compose logs --tail=200 identity
+          exit 1
+          EOSSH
+
+      # THE STEP THAT WOULD HAVE CAUGHT 2026-08-01.
+      #
+      # Health says the process is alive. This asks the question a customer
+      # asks. An unknown handle answering 404 is a PASS — the registry is
+      # reachable, authenticating and routing. Any 5xx is a fail, because that
+      # is precisely the shape the outage took while everything else looked fine.
+      - name: Probe alias resolution from the public internet
+        env:
+          BASE: ${{ secrets.IDENTITY_PUBLIC_BASE_URL }}
+          HANDLE: ${{ inputs.probe_handle }}
+        run: |
+          url="${BASE%/}/identity/resolve?alias=${HANDLE}&purpose=payment"
+          echo "probing: $url"
+          code=$(curl -s -o /tmp/body.txt -w '%{http_code}' --max-time 25 "$url" || echo 000)
+          echo "HTTP $code"
+          head -c 400 /tmp/body.txt || true
+          echo
+          case "$code" in
+            200|404)
+              echo "Resolution path is answering ($code)." ;;
+            000)
+              echo "::error::No response from $url — the service is not reachable."; exit 1 ;;
+            5*)
+              echo "::error::HTTP $code from the resolution path. This is the 2026-08-01 failure shape: the service is up but alias resolution is broken. Deploy is NOT good."; exit 1 ;;
+            *)
+              echo "::error::Unexpected HTTP $code from the resolution path."; exit 1 ;;
+          esac
+
+      - name: Report
+        if: always()
+        env:
+          REF: ${{ inputs.ref }}
+        run: |
+          {
+            echo "### OpenWave Identity deploy"
+            echo ""
+            echo "- ref: \`$REF\`"
+            echo "- result: **${{ job.status }}**"
+            echo ""
+            echo "Green here means the container is healthy AND an anonymous alias"
+            echo "resolution returned 200 or 404. A 5xx fails the run on purpose."
+          } >> "$GITHUB_STEP_SUMMARY"
