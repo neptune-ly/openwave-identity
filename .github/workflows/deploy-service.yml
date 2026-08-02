@@ -1,28 +1,44 @@
-# Deploy the OpenWave Identity SERVICE to the production VPS.
+# Deploy the OPENWAVE IDENTITY registry to production.
 #
-# The repository already had a workflow called "Deploy Pages" — it publishes
-# DOCUMENTATION to GitHub Pages and touches no running service. Until this file
-# existed, shipping the registry meant somebody SSH-ing in by hand, and there
-# was no record of who deployed what or whether it came back up.
+# The repository's other workflow ("Deploy Pages") publishes DOCUMENTATION to
+# GitHub Pages and touches no running service. Until this existed, shipping the
+# registry meant somebody SSH-ing in by hand, with no record of who deployed
+# what or whether it came back up.
 #
-# ## What this does NOT do
+# ## No SSH key lives in this repository
 #
-# It does not create infrastructure and it does not hold a database password.
-# The VPS layout, secrets and Compose files live in the Astro repo at
-# `deploy/hetzner` (see PRODUCTION_DEPLOYMENT.md). This workflow only performs
-# the operation an operator does today: pull, rebuild the identity container,
-# and then PROVE the thing that matters still answers.
+# The first version of this workflow reached the host over SSH, which meant a
+# private key in GitHub secrets — and it NEVER RAN ONCE, because nobody pasted
+# one in. Everywhere the estate actually deploys (andalus, nexus, neptune-plus)
+# it uses a runner registered on the machine, authenticating with the workflow's
+# own `github.token`. No long-lived credential is stored anywhere, and nothing
+# off the box can use it.
 #
-# ## Why it verifies resolution and not just health
+# ## One runner serves both OpenWave services
 #
-# On 2026-08-01 the alias surface returned HTTP 500 for every input for a full
-# day while `/actuator/health` reported UP the whole time, because the health
-# probe only asks whether the process is running. A staff tester was the
-# detection mechanism.
+# Identity and Astro are sibling checkouts under /opt/openwave brought up by one
+# compose file. Register the runner at the ORGANISATION level (neptune-ly) and
+# both repos use the same one — one machine, one runner, two services.
 #
-# So this deploy is not "green" because the container started. It is green only
-# when an anonymous alias lookup — the exact call that was broken — comes back
-# with a real answer or a clean 404. A 5xx fails the run.
+# ## Why it probes resolution and not just health
+#
+# On 2026-08-01 this exact surface returned HTTP 500 for every input for a full
+# day while /actuator/health reported UP throughout, because health only asks
+# whether the process is running. A staff tester was the detection mechanism,
+# which is not a mechanism. A clean 404 for an unknown handle is a PASS; a 5xx
+# fails the run.
+#
+# ## One-time setup, in two deliberate halves
+#
+#   1. Org Settings -> Actions -> Runners -> New runner, on the OpenWave box,
+#      labels:  self-hosted, openwave, astro-app
+#      (grant it access to neptune-astro AND openwave-identity)
+#   2. Settings -> Variables -> IDENTITY_PROD_ENABLED = true
+#
+# The second is not ceremony: a job targeting a runner that does not exist does
+# not fail, it QUEUES indefinitely, which reads as a slow deploy rather than an
+# unconfigured one. The estate learned this twice already
+# (ANDALUS_PROD17_ENABLED, NEXUS_PROD210_ENABLED).
 
 name: Deploy Service
 
@@ -34,142 +50,64 @@ on:
         required: true
         default: 'main'
       probe_handle:
-        description: 'Handle used for the post-deploy resolution probe (any value; a 404 passes, a 5xx fails)'
+        description: 'Handle used for the post-deploy resolution probe (a 404 passes, a 5xx fails)'
         required: true
         default: 'deploy-probe-does-not-exist'
 
-# Never let two deploys touch the same host at once — a half-built image and a
-# `docker compose up` racing each other is how a VPS ends up serving neither
-# version.
+# Identity and Astro share a host and a compose project, so their deploys must
+# not interleave — a `docker compose up` from each at once is how a box ends up
+# serving neither. Same concurrency group as the Astro workflow on purpose.
 concurrency:
-  group: openwave-identity-deploy
+  group: openwave-box-deploy
   cancel-in-progress: false
 
 jobs:
-  deploy:
+  # Runs on GitHub's own runners so it answers even when no self-hosted runner
+  # exists — which is the entire point.
+  guard:
+    name: Check the deploy target is configured
     runs-on: ubuntu-latest
-    environment: production
+    steps:
+      - name: Require IDENTITY_PROD_ENABLED
+        run: |
+          if [ "${{ vars.IDENTITY_PROD_ENABLED }}" != "true" ]; then
+            echo "::error::IDENTITY_PROD_ENABLED is not 'true'."
+            echo "Identity deploys are blocked until the self-hosted runner is installed and"
+            echo "the switch is turned on deliberately:"
+            echo ""
+            echo "  1. Org Settings -> Actions -> Runners -> New runner, on the OpenWave box"
+            echo "     labels: self-hosted, openwave, astro-app"
+            echo "  2. Settings -> Variables -> IDENTITY_PROD_ENABLED = true"
+            echo ""
+            echo "NOTE: /opt/openwave/openwave-identity is not yet a git checkout — it was"
+            echo "assembled by rsync. The deploy script refuses and prints the conversion"
+            echo "steps rather than guessing at a tree nobody has reconciled."
+            exit 1
+          fi
+          echo "Deploy target enabled."
+
+  deploy:
+    name: Deploy identity registry
+    needs: guard
+    runs-on:
+      - self-hosted
+      - openwave
+      - astro-app
     timeout-minutes: 30
 
     steps:
-      - name: Check required secrets are present
-        env:
-          HOST: ${{ secrets.IDENTITY_DEPLOY_HOST }}
-          USER: ${{ secrets.IDENTITY_DEPLOY_USER }}
-          KEY: ${{ secrets.IDENTITY_DEPLOY_SSH_KEY }}
-          BASE: ${{ secrets.IDENTITY_PUBLIC_BASE_URL }}
-        run: |
-          missing=""
-          [ -n "$HOST" ] || missing="$missing IDENTITY_DEPLOY_HOST"
-          [ -n "$USER" ] || missing="$missing IDENTITY_DEPLOY_USER"
-          [ -n "$KEY" ]  || missing="$missing IDENTITY_DEPLOY_SSH_KEY"
-          [ -n "$BASE" ] || missing="$missing IDENTITY_PUBLIC_BASE_URL"
-          if [ -n "$missing" ]; then
-            echo "::error::Missing repository secrets:$missing"
-            echo "Set them under Settings -> Secrets and variables -> Actions."
-            echo "IDENTITY_PUBLIC_BASE_URL is the https origin plus /v1, e.g. https://identity.example.com/v1"
-            exit 1
-          fi
+      - name: Checkout the deploy script
+        uses: actions/checkout@v4
 
-      - name: Configure SSH
+      - name: Deploy and verify
         env:
-          KEY: ${{ secrets.IDENTITY_DEPLOY_SSH_KEY }}
-          HOST: ${{ secrets.IDENTITY_DEPLOY_HOST }}
-          KNOWN_HOSTS: ${{ secrets.IDENTITY_DEPLOY_KNOWN_HOSTS }}
-        run: |
-          mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          printf '%s\n' "$KEY" > ~/.ssh/id_deploy
-          chmod 600 ~/.ssh/id_deploy
-          if [ -n "$KNOWN_HOSTS" ]; then
-            printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
-          else
-            # Pinning the host key is strongly preferred. Without
-            # IDENTITY_DEPLOY_KNOWN_HOSTS this falls back to trust-on-first-use,
-            # which cannot detect a substituted host — set the secret.
-            echo "::warning::IDENTITY_DEPLOY_KNOWN_HOSTS is not set; host key is not pinned."
-            ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
-          fi
-          chmod 600 ~/.ssh/known_hosts
-
-      - name: Pull and rebuild the identity service
-        env:
-          HOST: ${{ secrets.IDENTITY_DEPLOY_HOST }}
-          USER: ${{ secrets.IDENTITY_DEPLOY_USER }}
-          REF: ${{ inputs.ref }}
-        run: |
-          ssh -i ~/.ssh/id_deploy -o BatchMode=yes "$USER@$HOST" bash -seu <<EOSSH
-          # The Compose project lives in the Astro repo; the identity service is
-          # built from the sibling checkout (context: ../../../openwave-identity).
-          cd /opt/openwave/openwave-identity
-          git fetch --all --prune
-          git checkout --detach "$REF"
-          echo "identity now at: \$(git rev-parse --short HEAD) ($REF)"
-
-          cd /opt/openwave/neptune-astro/deploy/hetzner
-          # Only the identity service. Rebuilding everything would restart the
-          # Astro gateway and Caddy for a change that does not touch them.
-          docker compose up -d --build identity
-          docker compose ps identity
-          EOSSH
-
-      - name: Wait for the container to report healthy
-        env:
-          HOST: ${{ secrets.IDENTITY_DEPLOY_HOST }}
-          USER: ${{ secrets.IDENTITY_DEPLOY_USER }}
-        run: |
-          ssh -i ~/.ssh/id_deploy -o BatchMode=yes "$USER@$HOST" bash -seu <<'EOSSH'
-          cd /opt/openwave/neptune-astro/deploy/hetzner
-          cid=$(docker compose ps -q identity)
-          for i in $(seq 1 60); do
-            state=$(docker inspect -f '{{.State.Health.Status}}' "$cid" 2>/dev/null || echo unknown)
-            [ "$state" = "healthy" ] && { echo "container healthy after ${i}0s"; exit 0; }
-            [ "$state" = "unhealthy" ] && { echo "container reported UNHEALTHY"; docker compose logs --tail=120 identity; exit 1; }
-            sleep 10
-          done
-          echo "container never became healthy"
-          docker compose logs --tail=200 identity
-          exit 1
-          EOSSH
-
-      # THE STEP THAT WOULD HAVE CAUGHT 2026-08-01.
-      #
-      # Health says the process is alive. This asks the question a customer
-      # asks. An unknown handle answering 404 is a PASS — the registry is
-      # reachable, authenticating and routing. Any 5xx is a fail, because that
-      # is precisely the shape the outage took while everything else looked fine.
-      - name: Probe alias resolution from the public internet
-        env:
-          BASE: ${{ secrets.IDENTITY_PUBLIC_BASE_URL }}
-          HANDLE: ${{ inputs.probe_handle }}
-        run: |
-          url="${BASE%/}/identity/resolve?alias=${HANDLE}&purpose=payment"
-          echo "probing: $url"
-          code=$(curl -s -o /tmp/body.txt -w '%{http_code}' --max-time 25 "$url" || echo 000)
-          echo "HTTP $code"
-          head -c 400 /tmp/body.txt || true
-          echo
-          case "$code" in
-            200|404)
-              echo "Resolution path is answering ($code)." ;;
-            000)
-              echo "::error::No response from $url — the service is not reachable."; exit 1 ;;
-            5*)
-              echo "::error::HTTP $code from the resolution path. This is the 2026-08-01 failure shape: the service is up but alias resolution is broken. Deploy is NOT good."; exit 1 ;;
-            *)
-              echo "::error::Unexpected HTTP $code from the resolution path."; exit 1 ;;
-          esac
-
-      - name: Report
-        if: always()
-        env:
-          REF: ${{ inputs.ref }}
-        run: |
-          {
-            echo "### OpenWave Identity deploy"
-            echo ""
-            echo "- ref: \`$REF\`"
-            echo "- result: **${{ job.status }}**"
-            echo ""
-            echo "Green here means the container is healthy AND an anonymous alias"
-            echo "resolution returned 200 or 404. A 5xx fails the run on purpose."
-          } >> "$GITHUB_STEP_SUMMARY"
+          APP_DIR: /opt/openwave/openwave-identity
+          COMPOSE_DIR: /opt/openwave/neptune-astro/deploy/hetzner
+          COMPOSE_FILE: docker-compose.app.yml
+          DEPLOY_REF: ${{ inputs.ref }}
+          PROBE_HANDLE: ${{ inputs.probe_handle }}
+          # Public origin plus the /v1 context path, not a secret.
+          PUBLIC_BASE_URL: ${{ vars.IDENTITY_PUBLIC_BASE_URL || 'https://identity.neptune.ly/v1' }}
+          DEPLOY_GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: bash scripts/deploy-prod-self-hosted.sh
