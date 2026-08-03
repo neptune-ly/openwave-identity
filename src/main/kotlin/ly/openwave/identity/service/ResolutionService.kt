@@ -1,6 +1,7 @@
 package ly.openwave.identity.service
 
 import ly.openwave.identity.entity.IdentityStatus
+import ly.openwave.identity.exception.HandleRetiredException
 import ly.openwave.identity.exception.IdentityNotFoundException
 import ly.openwave.identity.repository.IdentityRepository
 import ly.openwave.identity.repository.LinkedAccountRepository
@@ -19,13 +20,29 @@ data class AliasResolution(
 @Service
 class ResolutionService(
     private val identityRepo: IdentityRepository,
-    private val linkedAccountRepo: LinkedAccountRepository
+    private val linkedAccountRepo: LinkedAccountRepository,
+    private val retiredHandleRepo: ly.openwave.identity.repository.RetiredHandleRepository
 ) {
     fun resolve(alias: String): AliasResolution {
         val (handle, bankHint) = parseAlias(alias)
 
         val identity = identityRepo.findByNptHandle(handle)
-            ?: throw IdentityNotFoundException(alias)
+            ?: run {
+                // A RETIRED NAME IS NOT A TYPO, AND SAYING SO MATTERS.
+                //
+                // Someone paying a still-circulating old handle — a saved payee,
+                // a printed QR, an address pasted into a message — needs to know
+                // the name MOVED, not that they mistyped. Those are different
+                // next actions, and collapsing them means retrying the same
+                // wrong address until they give up.
+                //
+                // It deliberately does not name the successor. Forwarding would
+                // defeat renaming for a customer who wanted to stop being
+                // reachable, and would let anyone discover the new handle by
+                // paying the old one.
+                if (retiredHandleRepo.existsByHandle(handle)) throw HandleRetiredException(handle)
+                throw IdentityNotFoundException(alias)
+            }
 
         if (identity.status != IdentityStatus.ACTIVE)
             throw IdentityNotFoundException(alias)

@@ -24,6 +24,16 @@ data class CustomerPortalAccessResult(
     val nextStep: String
 )
 
+/**
+ * Why a name cannot be used, when it cannot.
+ *
+ * Three genuinely different answers with three different next actions: pick
+ * another (TAKEN), pick another and it will never be free (RETIRED), fix the
+ * spelling (INVALID). Collapsing them into one sentence is the exact defect this
+ * area has been producing for months.
+ */
+enum class HandleAvailability { AVAILABLE, TAKEN, RETIRED, INVALID }
+
 data class ClaimHandleResult(
     val identity: IdentityEntity,
     val customerPortalAccess: CustomerPortalAccessResult?
@@ -35,9 +45,12 @@ class IdentityService(
     private val linkedAccountRepo: LinkedAccountRepository,
     private val bankRepo: BankRepository,
     private val portalUserService: PortalUserService,
+    private val retiredHandleRepo: ly.openwave.identity.repository.RetiredHandleRepository,
     private val portalSecurityService: PortalSecurityService,
     private val credentialNotificationService: PortalCredentialNotificationService
 ) {
+    private val log = org.slf4j.LoggerFactory.getLogger(IdentityService::class.java)
+
 
     @Transactional
     fun claimHandle(
@@ -52,6 +65,15 @@ class IdentityService(
         email: String? = null
     ): ClaimHandleResult {
         if (!HANDLE_REGEX.matches(nptHandle)) throw HandleInvalidFormatException(nptHandle)
+
+        // A RETIRED HANDLE IS NOT AVAILABLE, AND THIS IS WHERE THAT IS ENFORCED.
+        //
+        // Retirement lives in its own table precisely so it survives the row it
+        // came from. If claim did not consult it, the reservation would be a
+        // comment: the first person to ask for a renamed customer's old name
+        // would get it, and every payee, QR and pasted address still pointing at
+        // that name would start paying them.
+        retiredHandleRepo.findByHandle(nptHandle)?.let { throw HandleRetiredException(nptHandle) }
         val normalizedPhone = normalizePhone(phone) ?: phone?.trim()?.takeIf { it.isNotBlank() }
         val normalizedEmail = email?.trim()?.takeIf { it.isNotBlank() } ?: throw CustomerEmailRequiredException()
 
@@ -163,6 +185,164 @@ class IdentityService(
             actionLabel = "Identity enrolled and first account linked"
         )
         return ClaimHandleResult(identity, ensureCustomerPortalAccess(identity, normalizedEmail))
+    }
+
+
+    // ── renaming ────────────────────────────────────────────────────────────
+
+    /**
+     * How long a customer must wait between renames.
+     *
+     * Every rename permanently removes a string from circulation, so the limit
+     * is not about load — it is about a customer (or a script holding a bank's
+     * key) cycling handles to squat names at the registry's expense, and about
+     * probing which names are free by watching which renames succeed.
+     */
+    private val renameCooldown: java.time.Duration = java.time.Duration.ofDays(30)
+
+    /** A lifetime cap, because a cooldown alone still permits twelve a year. */
+    private val maxLifetimeRenames = 3
+
+    /**
+     * Changes a customer's handle, and retires the old one forever.
+     *
+     * ## What this fixes
+     *
+     * There was no rename path at all. [claimHandle] looks the customer up by
+     * national ID and throws HandleTaken whenever the stored handle differs from
+     * the requested one, so a customer's SECOND username was refused
+     * permanently — the bank saved it, OpenWave refused it, and the app reported
+     * a failure every time. That was reported as "username set in app still says
+     * failed to add to OpenWave Identity", four fixes ago.
+     *
+     * ## The old handle is retired, not released
+     *
+     * An npt handle is a payment address. Releasing it would silently redirect
+     * every saved payee, printed QR and pasted address to whoever claimed it
+     * next. Retirement is permanent and it is NOT a redirect: the old name
+     * resolves to an explicit refusal, never to the new one, because forwarding
+     * would defeat the point for a customer who renamed to stop being reachable
+     * and would let anyone discover the new handle by paying the old one.
+     *
+     * ## Who may do this
+     *
+     * A bank that actually serves this customer — proved by holding a linked
+     * account for them — AND the national ID, which is the same proof-of-identity
+     * bar [claimHandle] sets. A registered bank with no relationship to the
+     * customer cannot rename them, which without the account check it could,
+     * since every bank authenticates the same way.
+     */
+    @Transactional
+    fun renameHandle(
+        currentHandle: String,
+        newHandle: String,
+        bankHandle: String,
+        nationalId: String
+    ): IdentityEntity {
+        val desired = newHandle.trim().lowercase()
+        if (!HANDLE_REGEX.matches(desired)) throw HandleInvalidFormatException(desired)
+
+        val identity = identityRepo.findByNptHandle(currentHandle.trim().lowercase())
+            ?: throw IdentityNotFoundException(currentHandle)
+
+        // Renaming to the name you already hold is a no-op, not an error. The
+        // caller is often a retry, and burning a rename slot on a retry would
+        // punish exactly the flaky-network case this whole feature exists for.
+        if (identity.nptHandle == desired) return identity
+
+        bankRepo.findByBankHandle(bankHandle) ?: throw BankNotFoundException(bankHandle)
+
+        // The caller must SERVE this customer. Every bank authenticates the same
+        // way, so without this any registered bank could rename any customer in
+        // the network.
+        if (!linkedAccountRepo.existsByIdentityIdAndBankHandle(identity.id, bankHandle)) {
+            throw HandleRenameNotPermittedException(
+                "Bank '$bankHandle' holds no linked account for this identity."
+            )
+        }
+
+        // The same proof-of-identity bar claim sets. A bank that serves the
+        // customer still has to name them correctly.
+        if (identity.nationalId.isNullOrBlank() || identity.nationalId != nationalId) {
+            throw HandleRenameNotPermittedException(
+                "National ID does not match the identity being renamed."
+            )
+        }
+
+        if (identity.status != IdentityStatus.ACTIVE) {
+            throw HandleRenameNotPermittedException("This identity is not active.")
+        }
+
+        // Is the new name free? BOTH tables, in this order — a live holder is
+        // the commoner case and gives the more useful error.
+        identityRepo.findByNptHandle(desired)?.let { throw HandleTakenException(desired) }
+        retiredHandleRepo.findByHandle(desired)?.let { throw HandleRetiredException(desired) }
+
+        if (identity.handleRenameCount >= maxLifetimeRenames) {
+            throw HandleRenameTooSoonException(
+                "This identity has already changed its name $maxLifetimeRenames times."
+            )
+        }
+        identity.handleRenamedAt?.let { last ->
+            val next = last.plus(renameCooldown)
+            if (Instant.now().isBefore(next)) {
+                throw HandleRenameTooSoonException(
+                    "A name can be changed once every ${renameCooldown.toDays()} days. Next change allowed after $next."
+                )
+            }
+        }
+
+        val previous = identity.nptHandle
+
+        // RETIRE FIRST. Both writes are in one transaction, so ordering does not
+        // decide what survives a crash — but it decides what a UNIQUE violation
+        // means. Reserving before moving means a duplicate here aborts with the
+        // old handle still on the identity, rather than leaving a renamed
+        // customer whose old name was never reserved.
+        retiredHandleRepo.save(
+            ly.openwave.identity.entity.RetiredHandleEntity(
+                handle = previous,
+                formerIdentityId = identity.id,
+                replacedByHandle = desired,
+                performedByBank = bankHandle
+            )
+        )
+
+        identity.nptHandle = desired
+        identity.handleRenamedAt = Instant.now()
+        identity.handleRenameCount += 1
+        identity.updatedAt = Instant.now()
+        identityRepo.save(identity)
+
+        // THE CUSTOMER'S PORTAL LOGIN IS THE HANDLE.
+        //
+        // AuthController and CustomerPortalController both resolve the customer
+        // by findByNptHandle(user.username), so leaving the portal user behind
+        // locks them out of OpenWave entirely — a rename that silently costs
+        // them their login is worse than no rename at all.
+        portalUserService.renameCustomerUser(previous, desired)
+
+        log.info(
+            "Handle renamed: '{}' -> '{}' by bank '{}'; '{}' is now permanently retired",
+            previous, desired, bankHandle, previous
+        )
+        return identity
+    }
+
+    /**
+     * Whether a name can be claimed right now, and why not if it cannot.
+     *
+     * Exists so a client can ask BEFORE trying. The three answers are genuinely
+     * different — taken, retired, or malformed — and a caller that cannot tell
+     * them apart shows one useless sentence, which is the shape of bug this
+     * whole area has been producing.
+     */
+    fun handleAvailability(handle: String): HandleAvailability {
+        val normalized = handle.trim().lowercase()
+        if (!HANDLE_REGEX.matches(normalized)) return HandleAvailability.INVALID
+        if (identityRepo.findByNptHandle(normalized) != null) return HandleAvailability.TAKEN
+        if (retiredHandleRepo.existsByHandle(normalized)) return HandleAvailability.RETIRED
+        return HandleAvailability.AVAILABLE
     }
 
     private fun ensureCustomerPortalAccess(identity: IdentityEntity, email: String?): CustomerPortalAccessResult? {

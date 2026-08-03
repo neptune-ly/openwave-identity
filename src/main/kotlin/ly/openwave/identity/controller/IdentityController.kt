@@ -11,6 +11,7 @@ import ly.openwave.identity.config.RegistryProperties
 import ly.openwave.identity.entity.IdentityEntity
 import ly.openwave.identity.entity.LinkedAccountEntity
 import ly.openwave.identity.security.callerBankHandle
+import ly.openwave.identity.service.HandleAvailability
 import ly.openwave.identity.service.IdentityService
 import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpStatus
@@ -43,6 +44,51 @@ class IdentityController(
         )
         return ResponseEntity.status(if (wasNew) HttpStatus.CREATED else HttpStatus.OK)
             .body(result.identity.toResponse(result.customerPortalAccess))
+    }
+
+
+    /**
+     * Change a customer's handle. The old one is retired permanently.
+     *
+     * PATCH rather than POST because this MOVES an existing identity; a POST to
+     * /claim already exists and means something different, and having two verbs
+     * that both look like "make me this name" is how a caller picks the wrong one.
+     *
+     * 409 when the new name is live, 410 when it is retired, 403 when the caller
+     * does not serve this customer or the national ID does not match, 429 when
+     * the cooldown or the lifetime cap has been hit. Four different problems with
+     * four different next actions — the single-sentence error is exactly what has
+     * been making this area unfixable.
+     */
+    @PatchMapping("/{nptHandle}/handle")
+    fun renameHandle(
+        @PathVariable nptHandle: String,
+        @Valid @RequestBody req: RenameHandleRequest
+    ): IdentityResponse {
+        val identity = identityService.renameHandle(
+            currentHandle = nptHandle,
+            newHandle = req.newHandle,
+            bankHandle = callerBankHandle(),
+            nationalId = req.nationalId
+        )
+        return identity.toResponse(null)
+    }
+
+    /**
+     * Whether a name can be used, before anyone tries to take it.
+     *
+     * Answers TAKEN, RETIRED, INVALID or AVAILABLE separately, because those
+     * call for different things from the customer: pick another, pick another
+     * and it will never free up, fix the spelling, or go ahead.
+     */
+    @GetMapping("/handles/{handle}/availability")
+    fun handleAvailability(@PathVariable handle: String): Map<String, Any> {
+        val verdict = identityService.handleAvailability(handle)
+        return mapOf(
+            "handle" to handle.trim().lowercase(),
+            "status" to verdict.name,
+            "available" to (verdict == HandleAvailability.AVAILABLE)
+        )
     }
 
     @GetMapping("/{nptHandle}")
@@ -477,3 +523,26 @@ private fun maskSensitiveReference(value: String?): String {
     return Regex("LY[0-9A-Z]{13,32}", RegexOption.IGNORE_CASE)
         .replace(text) { match -> maskIban(match.value.uppercase()) }
 }
+
+/**
+ * A rename asks for far less than a claim, and that is deliberate.
+ *
+ * No IBAN, no display name, no bank customer ref — the identity already exists
+ * and none of those change. What it DOES require is the national ID, which is
+ * the same proof-of-identity bar a claim sets: a bank that serves the customer
+ * still has to name them correctly.
+ */
+data class RenameHandleRequest(
+    @field:NotBlank
+    @field:Pattern(
+        regexp = "^[a-z0-9_.\\-]{3,32}$",
+        message = "Handle must be 3-32 lowercase alphanumeric characters, dots, underscores, or hyphens"
+    )
+    @com.fasterxml.jackson.annotation.JsonAlias("new_handle")
+    val newHandle: String,
+
+    @field:NotBlank
+    @field:Pattern(regexp = "^[0-9]{12}$", message = "National ID must be exactly 12 digits")
+    @com.fasterxml.jackson.annotation.JsonAlias("national_id")
+    val nationalId: String
+)

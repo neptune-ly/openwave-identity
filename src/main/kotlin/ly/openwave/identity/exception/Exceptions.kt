@@ -16,6 +16,29 @@ class IdentityNotFoundException(handle: String) :
 class HandleTakenException(handle: String) :
     RegistryException("HANDLE_TAKEN", "The handle '$handle' is already claimed", HttpStatus.CONFLICT)
 
+/**
+ * The name exists, belonged to somebody, and is permanently reserved.
+ *
+ * Deliberately DISTINCT from IdentityNotFound. A payer who addressed a
+ * still-circulating old handle needs to know the name moved rather than that
+ * they mistyped — those call for different next actions, and collapsing them is
+ * how a customer retries the same wrong address five times.
+ *
+ * It does NOT reveal the successor. Forwarding, or naming the new handle, would
+ * defeat the point for a customer who renamed to stop being reachable, and would
+ * let anyone discover the new name by paying the old one.
+ */
+class HandleRetiredException(handle: String) :
+    RegistryException("HANDLE_RETIRED", "The name '$handle' is no longer in use.", HttpStatus.GONE)
+
+/** The caller is trying to rename an identity it does not serve. */
+class HandleRenameNotPermittedException(msg: String) :
+    RegistryException("HANDLE_RENAME_NOT_PERMITTED", msg, HttpStatus.FORBIDDEN)
+
+/** Too soon, or too many times. See IdentityService.renameHandle. */
+class HandleRenameTooSoonException(msg: String) :
+    RegistryException("HANDLE_RENAME_TOO_SOON", msg, HttpStatus.TOO_MANY_REQUESTS)
+
 class HandleInvalidFormatException(handle: String) :
     RegistryException("HANDLE_INVALID_FORMAT", "Handle '$handle' is invalid. Use 3-32 lowercase alphanumeric characters, dots, underscores, or hyphens.", HttpStatus.UNPROCESSABLE_ENTITY)
 

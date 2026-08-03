@@ -362,8 +362,13 @@ class IdentityEntity(
     @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
     val id: Long = 0,
 
+    /**
+     * MUTABLE, because a customer can change their name — but never freely.
+     * See IdentityService.renameHandle: the old value is retired permanently,
+     * so this field moving forward does not release the string behind it.
+     */
     @Column(name = "npt_handle", nullable = false, unique = true, length = 32)
-    val nptHandle: String,
+    var nptHandle: String,
 
     @Column(name = "display_name", nullable = false, length = 100)
     var displayName: String,
@@ -390,8 +395,56 @@ class IdentityEntity(
     @Column(name = "updated_at", nullable = false)
     var updatedAt: Instant = Instant.now(),
 
+    /** When the handle last moved. Read by the rename rate limit. */
+    @Column(name = "handle_renamed_at")
+    var handleRenamedAt: Instant? = null,
+
+    /**
+     * How many times this identity has renamed, ever.
+     *
+     * Every rename permanently reserves a string, so this is not vanity
+     * accounting — it is the number of names this customer has taken out of
+     * circulation, and the reason there is a lifetime cap as well as a
+     * cooling-off period.
+     */
+    @Column(name = "handle_rename_count", nullable = false)
+    var handleRenameCount: Int = 0,
+
     @OneToMany(mappedBy = "identity", cascade = [CascadeType.ALL], fetch = FetchType.LAZY)
     val linkedAccounts: MutableList<LinkedAccountEntity> = mutableListOf()
+)
+
+/**
+ * A handle that used to belong to somebody and will never belong to anyone else.
+ *
+ * An npt handle is a payment address: saved as a payee, printed on a QR, pasted
+ * into a message. Re-issuing one would quietly redirect every still-circulating
+ * reference to a stranger, with no error and a plausible name on the
+ * confirmation screen. There is no cooling-off period long enough to make that
+ * safe — a payee saved this year is still a payee in four — so retirement is
+ * permanent.
+ */
+@Entity
+@Table(name = "retired_handles")
+class RetiredHandleEntity(
+    @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
+    val id: Long = 0,
+
+    @Column(name = "handle", nullable = false, unique = true, length = 32)
+    val handle: String,
+
+    @Column(name = "former_identity_id", nullable = false)
+    val formerIdentityId: Long,
+
+    /** Null when the handle was retired by deletion rather than by a rename. */
+    @Column(name = "replaced_by_handle", length = 32)
+    val replacedByHandle: String? = null,
+
+    @Column(name = "performed_by_bank", length = 20)
+    val performedByBank: String? = null,
+
+    @Column(name = "retired_at", nullable = false, updatable = false)
+    val retiredAt: Instant = Instant.now()
 )
 
 @Entity

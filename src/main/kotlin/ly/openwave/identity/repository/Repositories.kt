@@ -240,3 +240,17 @@ interface LinkedAccountRepository : JpaRepository<LinkedAccountEntity, Long> {
     @Query("UPDATE LinkedAccountEntity l SET l.updatedAt = :now WHERE l.id = :id")
     fun touchUpdatedAt(id: Long, now: Instant)
 }
+
+
+/**
+ * Handles that used to belong to somebody and never will again.
+ *
+ * Consulted by every "is this name free" check. A retired handle is NOT free —
+ * that is the entire reservation, and the only thing standing between a renamed
+ * customer's old payees and a stranger's account.
+ */
+interface RetiredHandleRepository : org.springframework.data.jpa.repository.JpaRepository<ly.openwave.identity.entity.RetiredHandleEntity, Long> {
+    fun findByHandle(handle: String): ly.openwave.identity.entity.RetiredHandleEntity?
+    fun existsByHandle(handle: String): Boolean
+    fun findAllByFormerIdentityId(formerIdentityId: Long): List<ly.openwave.identity.entity.RetiredHandleEntity>
+}

@@ -133,6 +133,27 @@ class PortalUserService(
         if (callerAdmin) portalUserRepo.findAll().sortedBy { it.username }
         else portalUserRepo.findAllByBankHandle(callerBankHandle ?: "").sortedBy { it.username }
 
+    /**
+     * Moves a customer portal login to a new username.
+     *
+     * The customer's portal username IS their npt handle — AuthController and
+     * CustomerPortalController both resolve the customer with
+     * findByNptHandle(user.username). So a handle rename that does not move the
+     * login locks the customer out of OpenWave, which is a worse outcome than
+     * refusing the rename.
+     *
+     * Silently does nothing when there is no such user: portal access is only
+     * provisioned for customers with an email, so an identity without one has no
+     * login to move, and that is not a failure of the rename.
+     */
+    @Transactional
+    fun renameCustomerUser(currentUsername: String, newUsername: String) {
+        val user = portalUserRepo.findByUsername(currentUsername.trim().lowercase()) ?: return
+        user.username = newUsername.trim().lowercase()
+        user.updatedAt = Instant.now()
+        portalUserRepo.save(user)
+    }
+
     @Transactional
     fun ensureCustomerUser(username: String, displayName: String, email: String?): CustomerPortalUserResult {
         val normalizedUsername = username.trim().lowercase()
