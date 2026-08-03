@@ -44,7 +44,25 @@ log() {
 }
 
 DEPLOY_AUTH_TOKEN="${DEPLOY_GITHUB_TOKEN:-${GITHUB_TOKEN:-}}"
+
+# CLEAR ANY PREVIOUS REWRITE FIRST, and remove ours on the way out.
+#
+# The config KEY contains the token, so a second run does not replace the first
+# entry — it ADDS one, and git matches the earliest. GITHUB_TOKEN is valid only
+# for the run that issued it, so run 1 succeeds and run 2 dies with
+# "Authentication failed" with nothing in the repo changed. Observed on astro,
+# 2026-08-03; fixed here before it fires.
+clear_git_url_rewrites() {
+    while git config --global --get-regexp 'url\..*github\.com.*\.insteadof' >/dev/null 2>&1; do
+        key="$(git config --global --get-regexp 'url\..*github\.com.*\.insteadof' | head -1 | cut -d' ' -f1)"
+        [ -z "${key}" ] && break
+        git config --global --unset-all "${key}" 2>/dev/null || break
+    done
+}
+
+clear_git_url_rewrites
 if [ -n "${DEPLOY_AUTH_TOKEN}" ]; then
+    trap clear_git_url_rewrites EXIT
     git config --global url."https://x-access-token:${DEPLOY_AUTH_TOKEN}@github.com/".insteadOf "git@github.com:"
     git config --global url."https://x-access-token:${DEPLOY_AUTH_TOKEN}@github.com/".insteadOf "https://github.com/"
 fi
@@ -102,7 +120,28 @@ fi
     fi
 
     git fetch --all --prune --tags
-    git checkout --detach "${DEPLOY_REF}"
+    # RESOLVE THE REMOTE REF, NOT A LOCAL BRANCH OF THE SAME NAME.
+    #
+    # `git fetch` advances `origin/main`; it does NOT advance a local branch
+    # called `main`. So on a host that has one, `git checkout --detach main`
+    # detaches at whatever that branch pointed to whenever it was last touched —
+    # the deploy fetches correctly, rebuilds, passes its health check and ships
+    # nothing.
+    #
+    # Not hypothetical: this exact line did that to the astro deploy on
+    # 2026-08-03, twice, before anyone noticed the SHA on the box had not moved.
+    # Fixed here before it fires.
+    RESOLVED_REF="${DEPLOY_REF}"
+    if git rev-parse --verify -q "origin/${DEPLOY_REF}" >/dev/null 2>&1; then
+        RESOLVED_REF="origin/${DEPLOY_REF}"
+    fi
+
+    if [ "${RESOLVED_REF}" != "${DEPLOY_REF}" ] \
+        && [ "$(git rev-parse -q "${DEPLOY_REF}" 2>/dev/null)" != "$(git rev-parse -q "${RESOLVED_REF}")" ]; then
+        log "NOTE: local '${DEPLOY_REF}' is behind '${RESOLVED_REF}' — deploying the remote ref."
+    fi
+
+    git checkout --detach "${RESOLVED_REF}"
     log "Deploying: $(git rev-parse --short HEAD) ($(git log -1 --pretty='%s'))"
 
     cd "${COMPOSE_DIR}"
