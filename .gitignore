@@ -32,3 +32,14 @@ test-results/
 *.mp4
 *.mov
 *.m4v
+
+# Host- and agent-local, never shipped and never tracked.
+#
+# This repo is PUBLIC. `.agent/` holds internal working notes and `logs/` holds
+# runtime output from the production host — neither belongs in a public mirror,
+# and neither should block a deploy. Untracked files in the app directory made
+# the deploy script refuse (correctly: it cannot tell an internal note from an
+# uncommitted hotfix), so they are declared here instead of being deleted off
+# the box.
+.agent/
+logs/
