@@ -148,7 +148,7 @@ PY
             --security-opt no-new-privileges=true --user 0:0 \
             --mount "type=bind,src=${IDENTITY_UI_DIR},dst=/target,bind-propagation=rprivate" \
             --entrypoint /usr/bin/chown "${identity_image_id}" \
-            -hR --one-file-system -- "${runner_uid}:${runner_gid}" /target; then
+            -hR -- "${runner_uid}:${runner_gid}" /target; then
             ow_fail "bounded Identity portal ownership repair failed before checkout"
         fi
         current_cid="$(ow_live_compose_service_id "${COMPOSE_DIR}" "${COMPOSE_FILE}" "${PRODUCTION_ENV_FILE}" identity)"
