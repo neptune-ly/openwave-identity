@@ -1,0 +1,60 @@
+name: Recover V18 Success Receipt
+
+on:
+  workflow_dispatch:
+    inputs:
+      failed_deploy_sha:
+        description: 'Exact 40-character SHA whose healthy live container applied V18 before the receipt proof bug stopped the deploy'
+        required: true
+        type: string
+      probe_handle:
+        description: 'Unknown handle used only for a public 200/404 resolution proof'
+        required: true
+        default: 'deploy-probe-does-not-exist'
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: openwave-box-deploy
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require an explicit production recovery target
+        run: |
+          test "${{ vars.IDENTITY_PROD_ENABLED }}" = true || { echo '::error::IDENTITY_PROD_ENABLED is not true'; exit 1; }
+          test "${{ github.ref }}" = refs/heads/main || { echo '::error::V18 receipt recovery must run from reviewed main'; exit 1; }
+          [[ "${{ inputs.failed_deploy_sha }}" =~ ^[0-9a-f]{40}$ ]] || { echo '::error::failed_deploy_sha must be an immutable 40-character lowercase SHA'; exit 1; }
+
+  recover:
+    needs: guard
+    runs-on: [self-hosted, openwave, astro-app]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Check production release contract
+        run: bash scripts/check-production-release-contract.sh
+      - name: Recover only the signed V18 receipt
+        env:
+          PREFLIGHT_ATTESTATION_KEY: ${{ secrets.OPENWAVE_PROD_PREFLIGHT_ATTESTATION_KEY }}
+          APP_DIR: /opt/openwave/openwave-identity
+          COMPOSE_DIR: /opt/openwave/neptune-astro/deploy/hetzner
+          COMPOSE_FILE: docker-compose.app.yml
+          PRODUCTION_ENV_FILE: /opt/openwave/neptune-astro/deploy/hetzner/.env
+          FAILED_DEPLOY_SHA: ${{ inputs.failed_deploy_sha }}
+          PROBE_HANDLE: ${{ inputs.probe_handle }}
+          PUBLIC_BASE_URL: https://identity.neptune.ly/v1
+          RUNTIME_DIR: /opt/openwave/neptune-astro/deploy/hetzner/.env.openwave-release
+          EVIDENCE_DIR: /opt/openwave/neptune-astro/deploy/hetzner/.env.openwave-release/release-evidence/identity
+        run: |
+          test -n "$PREFLIGHT_ATTESTATION_KEY" || { echo '::error::OPENWAVE_PROD_PREFLIGHT_ATTESTATION_KEY is unset'; exit 1; }
+          secret_dir="$(mktemp -d)"; chmod 700 "$secret_dir"; trap 'rm -rf "$secret_dir"' EXIT
+          printf '%s\n' "$PREFLIGHT_ATTESTATION_KEY" >"$secret_dir/attestation.key"; chmod 600 "$secret_dir/attestation.key"
+          PREFLIGHT_ATTESTATION_KEY_FILE="$secret_dir/attestation.key" bash scripts/recover-v18-success-receipt.sh

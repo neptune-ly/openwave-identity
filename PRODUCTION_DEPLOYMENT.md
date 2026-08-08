@@ -134,6 +134,21 @@ so production-only Docker/DNS names resolve exactly as they do for the app. They
 must never fall back to host networking or reinterpret a service name as
 loopback.
 
+### One-shot V18 receipt recovery
+
+If a reviewed deploy proves a healthy exact-revision Identity container after
+Flyway applies V18 but stops before writing the signed receipt, do not rerun the
+normal first-deploy path and do not create the receipt by hand. Dispatch
+`Recover V18 Success Receipt` from `main` with the exact failed 40-character
+deploy SHA. The recovery is receipt-only: under the shared host lock it requires
+the clean host checkout, healthy OCI revision, public health and resolution,
+one successful Flyway V18 row, all eight schema objects, the object fingerprint,
+and the failed release migration-source hash to agree before it signs anything.
+It never checks out host code, builds or restarts a service, runs a migration, or
+publishes the portal. Existing or partial receipt state fails closed for manual
+review. After recovery succeeds, run a fresh normal preflight for the next
+reviewed immutable release SHA.
+
 Portal requests use a bounded client timeout and must end in content, a retryable
 error state, or a session-expired redirect. A loading skeleton is never an
 unbounded network state. The deploy's public byte checks prevent the Caddy bundle

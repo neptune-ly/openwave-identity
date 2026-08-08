@@ -9,6 +9,8 @@ customer="${repo_root}/openwave-ui/src/routes/portal/customer/+page.svelte"
 banks="${repo_root}/openwave-ui/src/routes/portal/banks/+page.svelte"
 reset_password="${repo_root}/openwave-ui/src/routes/reset-password/+page.svelte"
 asset_parser="${repo_root}/scripts/list-static-entry-assets.py"
+v18_recovery="${repo_root}/scripts/recover-v18-success-receipt.sh"
+v18_recovery_workflow="${repo_root}/.github/workflows/recover-v18-receipt.yml"
 
 require_literal() {
     local file="$1" literal="$2" message="$3"
@@ -37,6 +39,59 @@ if grep -Fq -- 'BASH_COMMAND' "${preflight}"; then
     printf 'release contract failed: preflight diagnostics must never print the failing command or its arguments\n' >&2
     exit 1
 fi
+canonical_v18_meta="SELECT checksum::text || '|' || CASE WHEN success THEN 't' ELSE 'f' END FROM flyway_schema_history"
+canonical_v18_meta_count="$((
+    $(grep -Foc -- "${canonical_v18_meta}" "${preflight}" || true) +
+    $(grep -Foc -- "${canonical_v18_meta}" "${deploy}" || true)
+))"
+[ "${canonical_v18_meta_count}" -eq 3 ] || {
+    printf 'release contract failed: all three normal V18 gates must use the canonical t/f success projection\n' >&2
+    exit 1
+}
+if grep -Fq -- "checksum || '|' || success" "${preflight}" "${deploy}" "${v18_recovery}"; then
+    printf 'release contract failed: V18 gates must not rely on ambiguous implicit boolean concatenation\n' >&2
+    exit 1
+fi
+require_literal "${v18_recovery}" "${canonical_v18_meta}" \
+    'the one-shot receipt recovery must use the same canonical V18 row proof'
+# shellcheck disable=SC2016
+require_literal "${v18_recovery}" 'expected_v18_checksum="$(python3 "${v18_checksum_tool}" "${v18_source}")"' \
+    'receipt recovery must calculate Flyway checksum from the exact failed-release migration source'
+# shellcheck disable=SC2016
+require_literal "${v18_recovery}" '[ "${v18_meta%%|*}" = "${expected_v18_checksum}" ]' \
+    'receipt recovery must bind the live Flyway row to the exact failed-release migration source'
+# These are literal recovery expressions, not values to expand in this checker.
+# shellcheck disable=SC2016
+require_literal "${v18_recovery}" '[ -z "$(git status --porcelain)" ]' \
+    'receipt recovery must require a clean production checkout'
+# shellcheck disable=SC2016
+require_literal "${v18_recovery}" '[ "${oci_revision}" = "${FAILED_DEPLOY_SHA}" ]' \
+    'receipt recovery must pin the live OCI revision to the failed deploy SHA'
+# shellcheck disable=SC2016
+require_literal "${v18_recovery}" '[ "${v18_count}" = 1 ]' \
+    'receipt recovery must prove exactly one V18 history row across every script name'
+# shellcheck disable=SC2016
+require_literal "${v18_recovery}" '[ "${v18_objects}" = 8 ]' \
+    'receipt recovery must prove all eight V18 schema objects'
+# shellcheck disable=SC2016
+require_literal "${v18_recovery}" '[ ! -e "${receipt}" ] && [ ! -L "${receipt}" ] && [ ! -e "${signature}" ] && [ ! -L "${signature}" ]' \
+    'receipt recovery must reject existing, partial, or dangling-symlink receipt state'
+require_literal "${v18_recovery_workflow}" 'failed_deploy_sha:' \
+    'the manual V18 recovery workflow must require an explicit failed release SHA'
+if grep -Eq -- '^[[:space:]]*(docker compose .*(build|up|down|restart)|git (checkout|switch|reset|fetch|pull)|pg_restore|pg_dump|rsync )' "${v18_recovery}"; then
+    printf 'release contract failed: V18 receipt recovery must never deploy, migrate, publish, or mutate the host checkout\n' >&2
+    exit 1
+fi
+# The cleanup ownership flag must be armed before either final receipt artifact
+# can appear, so an interrupted publish is recoverable without manual deletion.
+receipt_created_line="$(grep -nF -- 'receipt_created=1' "${v18_recovery}" | tail -1 | cut -d: -f1)"
+# shellcheck disable=SC2016
+receipt_publish_line="$(grep -nF -- 'mv -- "${receipt_tmp}" "${receipt}"' "${v18_recovery}" | cut -d: -f1)"
+[[ "${receipt_created_line}" =~ ^[0-9]+$ && "${receipt_publish_line}" =~ ^[0-9]+$ \
+    && "${receipt_created_line}" -lt "${receipt_publish_line}" ]] || {
+    printf 'release contract failed: interrupted V18 receipt publication must remain automatically recoverable\n' >&2
+    exit 1
+}
 preflight_fingerprint_alias_count="$(grep -Foc -- "SELECT 'table:' || relname AS item" "${preflight}" || true)"
 deploy_fingerprint_alias_count="$(grep -Foc -- "SELECT 'table:' || relname AS item" "${deploy}" || true)"
 fingerprint_alias_count="$((preflight_fingerprint_alias_count + deploy_fingerprint_alias_count))"
