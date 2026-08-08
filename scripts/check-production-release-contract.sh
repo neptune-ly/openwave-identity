@@ -34,6 +34,29 @@ fi
 
 require_literal "${deploy}" 'mapfile -t ui_asset_paths' \
     'the deploy must enumerate release entry assets before publishing'
+# These are literal deploy expressions, not values to expand in this checker.
+# shellcheck disable=SC2016
+require_literal "${deploy}" 'UI_ROLLBACK_DIR="${UI_ROLLBACK_DIR:-${RUNTIME_DIR}/ui-rollbacks/identity}"' \
+    'portal rollback bundles must live in the runner-owned release namespace'
+# shellcheck disable=SC2016
+require_literal "${deploy}" 'mktemp -d "${UI_ROLLBACK_DIR}/.identity.rollback-pending-${ROLLBACK_SHA}.XXXXXX"' \
+    'portal rollback creation must not require write access to the public UI parent'
+# shellcheck disable=SC2016
+require_literal "${deploy}" 'mv -- "${ui_backup_pending}" "${ui_backup_dir}"' \
+    'only a complete portal backup may enter the retained rollback set'
+# These searches compare literal deploy expressions.
+# shellcheck disable=SC2016
+ui_backup_line="$(grep -nF -- 'ui_backup_pending="$(mktemp -d "${UI_ROLLBACK_DIR}/.identity.rollback-pending-${ROLLBACK_SHA}.XXXXXX")"' "${deploy}" | cut -d: -f1)"
+# shellcheck disable=SC2016
+ui_backup_finalize_line="$(grep -nF -- 'mv -- "${ui_backup_pending}" "${ui_backup_dir}"' "${deploy}" | cut -d: -f1)"
+# shellcheck disable=SC2016
+checkout_line="$(grep -nF -- 'git checkout --detach "${RESOLVED_REF}"' "${deploy}" | cut -d: -f1)"
+[[ "${ui_backup_line}" =~ ^[0-9]+$ && "${ui_backup_finalize_line}" =~ ^[0-9]+$ && "${checkout_line}" =~ ^[0-9]+$ \
+    && "${ui_backup_line}" -lt "${ui_backup_finalize_line}" \
+    && "${ui_backup_finalize_line}" -lt "${checkout_line}" ]] || {
+    printf 'release contract failed: the complete portal rollback must be allocated and finalized before host checkout mutation\n' >&2
+    exit 1
+}
 # This is the literal deploy expression to enforce.
 # shellcheck disable=SC2016
 require_literal "${deploy}" 'cmp -s "${ui_source}${asset_path}" "${ui_asset_probe}"' \

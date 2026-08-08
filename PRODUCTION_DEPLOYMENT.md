@@ -77,11 +77,12 @@ What it does: on the host, resolve the requested remote ref in
 `docker compose up -d --build identity` from the Astro repo's `deploy/hetzner`,
 wait for the container healthcheck, and probe alias resolution over the public
 internet. After the backend probe passes, it copies the reviewed static bundle
-to the exact host-mounted `/opt/openwave/ui/identity` target, retains the prior
-bundle beside it, and requires both the public index and every entry asset named
-by that index to byte-match the release. Identity and Astro use a shared
-host-level `flock`; GitHub concurrency groups are repository-scoped and are not
-the cross-repository lock.
+to the exact host-mounted `/opt/openwave/ui/identity` target. Before changing
+the host checkout, it captures the prior portal in the runner-owned rollback
+namespace and bounds the retained copies. It then requires both the public index
+and every entry asset named by that index to byte-match the release. Identity
+and Astro use a shared host-level `flock`; GitHub concurrency groups are
+repository-scoped and are not the cross-repository lock.
 
 **A deploy is not green because the container started.** On 2026-08-01 the alias
 surface returned HTTP 500 for every input for a full day while
@@ -119,8 +120,8 @@ default privileges, ACLs, or RLS authorization still requires a staging or DR
 exercise with the real managed application role; this preflight does not claim
 to validate that separate property.
 
-The encrypted backups, signed evidence, and V18 receipt live under the
-runner-owned mode-700 namespace
+The encrypted backups, signed evidence, V18 receipt, and bounded portal rollback
+bundles live under the runner-owned mode-700 namespace
 `/opt/openwave/neptune-astro/deploy/hetzner/.env.openwave-release`. The existing
 `.env.*` ignore rule keeps this operational state out of the live Git checkout;
 do not move it to a new root-owned `/opt/openwave` directory or grant the runner
