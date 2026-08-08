@@ -88,6 +88,7 @@ jobs:
             echo "steps rather than guessing at a tree nobody has reconciled."
             exit 1
           fi
+          test "${{ github.ref }}" = refs/heads/main || { echo '::error::production deploy workflow must be dispatched from main'; exit 1; }
           if ! [[ "${{ inputs.ref }}" =~ ^[0-9a-f]{40}$ ]]; then
             echo "::error::Identity accepts only an immutable 40-character lowercase SHA."
             exit 1
@@ -108,7 +109,15 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref }}
+          fetch-depth: 0
           persist-credentials: false
+
+      - name: Require current reviewed main SHA
+        env:
+          RELEASE_SHA: ${{ inputs.ref }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA" || { echo '::error::checkout does not equal requested SHA'; exit 1; }
+          test "$(git rev-parse refs/remotes/origin/main)" = "$RELEASE_SHA" || { echo '::error::requested SHA is not current origin/main'; exit 1; }
 
       - name: Check production release contract
         run: bash scripts/check-production-release-contract.sh

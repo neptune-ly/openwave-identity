@@ -1,4 +1,4 @@
-import { _ as slot, et as attr, g as sanitize_props, n as onDestroy, u as derived, v as spread_props, x as unsubscribe_stores } from "../../../chunks/index-server.js";
+import { _ as slot, et as attr, g as sanitize_props, n as onDestroy, u as derived, v as spread_props } from "../../../chunks/index-server.js";
 import "../../../chunks/index-server2.js";
 import { t as theme } from "../../../chunks/theme.js";
 import "../../../chunks/client.js";
@@ -110,7 +110,6 @@ function Bell_ring($$renderer, $$props) {
 //#region src/routes/portal/+layout.svelte
 function _layout($$renderer, $$props) {
 	$$renderer.component(($$renderer) => {
-		var $$store_subs;
 		let { children } = $$props;
 		let session = null;
 		let currentTheme = "light";
@@ -233,7 +232,6 @@ function _layout($$renderer, $$props) {
 		$$renderer.push("<!--[0-->");
 		$$renderer.push(`<div class="ow-theme-root min-h-screen bg-[#050508] flex items-center justify-center"${attr("data-theme", currentTheme)}><div class="w-6 h-6 border-2 border-white/20 border-t-indigo-500 rounded-full animate-spin"></div></div>`);
 		$$renderer.push(`<!--]-->`);
-		if ($$store_subs) unsubscribe_stores($$store_subs);
 	});
 }
 //#endregion

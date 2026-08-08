@@ -21,7 +21,7 @@
   let username  = $state('');
   let password  = $state('');
   let loading   = $state(false);
-  let mode      = $state('');
+  let mode      = $state('customer');
   let currentTheme = $state('light');
   let recoveryMode = $state(false);
   let recoverySent = $state(false);
@@ -79,8 +79,23 @@
     return value === 'admin' || value === 'bank' || value === 'customer';
   }
 
-  async function connect() {
+  function syncAutofilledCredentials(event) {
+    const target = event?.currentTarget;
+    const form = target?.tagName === 'FORM' ? target : target?.form;
+    if (!form) return;
+    const formData = new FormData(form);
+    const formUsername = formData.get('username');
+    const formPassword = formData.get('password');
+    if (typeof formUsername === 'string') username = formUsername;
+    if (typeof formPassword === 'string') password = formPassword;
+  }
+
+  async function connect(event) {
     if (loading) return;
+    // Password managers can populate native input values without dispatching
+    // the input events that update Svelte state. Read the submitted form first
+    // so a visibly filled production form never leaves the button inert.
+    syncAutofilledCredentials(event);
     if (!mode) {
       toast.error('Choose the portal lane that matches this account');
       return;
@@ -239,6 +254,13 @@
     }
   }
 
+  function onTotpKey(event) {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      verifyTotp();
+    }
+  }
+
   async function checkBankApprovalStatus() {
     if (!bankApprovalChallengeId || !bankApprovalStatusToken || bankApprovalChecking) return;
     bankApprovalChecking = true;
@@ -266,13 +288,6 @@
       if (terminalPollingError) stopBankApprovalPolling();
     } finally {
       bankApprovalChecking = false;
-    }
-  }
-
-  function onKey(e) {
-    if (e.key === 'Enter') {
-      if (totpRequired) verifyTotp();
-      else connect();
     }
   }
 
@@ -443,10 +458,11 @@
         {:else}
           <form
             class="identity-auth-form"
+            autocomplete="on"
             onsubmit={(event) => {
               event.preventDefault();
               if (totpRequired) verifyTotp();
-              else connect();
+              else connect(event);
             }}
           >
             {#if bankApprovalRequired}
@@ -487,8 +503,10 @@
               <Label for="identity-totp">Authenticator code</Label>
               <Input
                 id="identity-totp"
+                name="totp"
                 bind:value={totpCode}
-                on:keydown={onKey}
+                on:keydown={onTotpKey}
+                autocomplete="one-time-code"
                 inputmode="numeric"
                 maxlength="6"
                 class="font-mono"
@@ -505,8 +523,9 @@
                 <Label for="identity-username">{mode === 'customer' ? 'Username / Email / Phone / National ID' : 'Username'}</Label>
                 <Input
                   id="identity-username"
+                  name="username"
                   bind:value={username}
-                  on:keydown={onKey}
+                  autocomplete="username"
                   disabled={loading}
                   placeholder={mode === 'customer' ? 'username, email, phone, or national ID' : 'portal username'}
                 />
@@ -535,16 +554,17 @@
                 </div>
                 <Input
                   id="identity-password"
+                  name="password"
                   type="password"
                   bind:value={password}
-                  on:keydown={onKey}
+                  autocomplete="current-password"
                   disabled={loading}
                   placeholder="Portal password"
                 />
               </div>
 
               <div class="grid gap-2">
-                <Button class="w-full" on:click={connect} disabled={loading || !mode || !username.trim() || !password}>
+                <Button type="submit" class="w-full" disabled={loading || !mode}>
                   {#if loading}Connecting...{:else}Sign in as {mode ? roleLabel(mode) : 'Portal user'}{/if}
                 </Button>
                 <Button

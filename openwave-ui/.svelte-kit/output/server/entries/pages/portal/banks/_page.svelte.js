@@ -120,10 +120,10 @@ function _page($$renderer, $$props) {
 		}
 		$$renderer.push(`<!--]--></div></section> <div class="space-y-6"><section class="identity-surface-card overflow-hidden"><div class="border-b border-white/[0.06] px-5 py-4"><div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between"><div><p class="text-[11px] uppercase tracking-[0.18em] text-white/30">${escape_html(isAdmin() ? "Directory registry" : "Published bank record")}</p> <h2 class="mt-1 text-lg font-semibold">${escape_html(isAdmin() ? "Bank directory" : "Current directory profile")}</h2> <p class="mt-1 text-[12px] text-white/35">${escape_html(isAdmin() ? "Open a dedicated bank desk for profile and readiness management." : "Use the button below to open your dedicated bank desk.")}</p></div> <div class="identity-role-accent">${escape_html(isAdmin() ? `${filteredBanks().length} matching record${filteredBanks().length === 1 ? "" : "s"}` : myBank() ? `${myBank().bankHandle} current record` : "Record loading")}</div></div></div> `);
 		if (!filteredBanks().length) {
-			$$renderer.push("<!--[1-->");
+			$$renderer.push("<!--[2-->");
 			$$renderer.push(`<div class="px-5 py-16 text-center text-sm text-white/40">No banks are registered yet.</div>`);
 		} else if (isAdmin()) {
-			$$renderer.push("<!--[2-->");
+			$$renderer.push("<!--[3-->");
 			$$renderer.push(`<div class="grid gap-3 border-b border-white/[0.06] px-5 py-4 lg:grid-cols-[minmax(0,1fr)_180px]"><label class="relative block">`);
 			Search($$renderer, { class: "pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-white/25" });
 			$$renderer.push(`<!----> <input${attr("value", search)} placeholder="Search bank, handle, contact" class="w-full rounded-xl border border-white/[0.1] bg-white/[0.04] py-2 pl-9 pr-3 text-[13px] text-white placeholder-white/20 focus:border-indigo-500/50 focus:outline-none"/></label> `);
@@ -163,7 +163,7 @@ function _page($$renderer, $$props) {
 			}
 			$$renderer.push(`<!--]--></div>`);
 		} else if (myBank()) {
-			$$renderer.push("<!--[3-->");
+			$$renderer.push("<!--[4-->");
 			$$renderer.push(`<div class="space-y-5 p-5"><div class="flex items-start gap-4"><div class="flex h-14 w-14 items-center justify-center overflow-hidden rounded-2xl border border-white/[0.08] bg-white/[0.05] text-sm font-semibold text-indigo-300">`);
 			if (myBank().branding?.logo_url) {
 				$$renderer.push("<!--[0-->");

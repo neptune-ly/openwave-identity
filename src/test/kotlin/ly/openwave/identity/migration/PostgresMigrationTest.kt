@@ -62,6 +62,24 @@ class PostgresMigrationTest {
     }
 
     @Test
+    fun `scoped bank credential migration preserves legacy credential storage`() {
+        val sql = requireNotNull(javaClass.classLoader.getResourceAsStream(
+            "db/migration/V19__scoped_bank_api_credentials.sql"
+        )).bufferedReader().use { it.readText() }
+
+        assertThat(sql).contains(
+            "CREATE TABLE bank_api_credentials",
+            "CONSTRAINT fk_bank_api_credentials_bank",
+            "FOREIGN KEY (bank_id) REFERENCES registered_banks (id) ON DELETE RESTRICT",
+            "api_key_hash VARCHAR(64) NOT NULL UNIQUE",
+            "ASTRO_REGISTRY",
+            "revoked_at",
+            "created_by"
+        )
+        assertThat(sql).doesNotContain("ALTER TABLE registered_banks")
+    }
+
+    @Test
     @EnabledIfEnvironmentVariable(
         named = "OPENWAVE_TEST_POSTGRES_URL",
         matches = "jdbc:postgresql:.*"
@@ -88,7 +106,7 @@ class PostgresMigrationTest {
 
         try {
             val result = flyway.migrate()
-            assertThat(result.migrationsExecuted).isGreaterThanOrEqualTo(18)
+            assertThat(result.migrationsExecuted).isGreaterThanOrEqualTo(19)
             flyway.validate()
         } finally {
             DriverManager.getConnection(url, username, password).use { connection ->

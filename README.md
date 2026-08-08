@@ -162,6 +162,9 @@ This separation is intentional. The registry owns NPT handle truth and bank-scop
 | `DELETE` | `/v1/identity/{handle}` | Bank key | Delete identity |
 | `GET` | `/v1/banks` | None (public) | Bank phonebook |
 | `POST` | `/v1/banks` | Admin key | Register new bank |
+| `POST` | `/v1/banks/{handle}/credentials` | Admin key | Issue a one-time scoped partner credential |
+| `GET` | `/v1/banks/{handle}/credentials` | Admin key | Inspect safe credential metadata (never raw keys) |
+| `POST` | `/v1/banks/{handle}/credentials/{id}/revoke` | Admin key | Revoke a scoped credential |
 | `PATCH` | `/v1/banks/{handle}` | Admin key | Update bank |
 | `PATCH` | `/v1/banks/{handle}/branding` | Admin portal | Update public bank branding |
 | `POST` | `/v1/banks/{handle}/branding/logo` | Admin portal | Upload public bank logo |
@@ -243,6 +246,14 @@ curl https://identity.example.com/v1/identity/resolve?alias=mtellesy
 
 Bank API keys are issued when a bank is registered via `POST /v1/banks`.
 Keys are shown **once** and stored as SHA-256 hashes only.
+
+For partner routing, an administrator may issue an additive
+`ASTRO_REGISTRY` credential at `POST /v1/banks/{handle}/credentials` with a
+safe audit label. The raw `bankApiKey` is returned only by that issuance
+response; list, audit, and revoke responses never contain it. These scoped
+keys can use only Astro's registry routes. The original
+`registered_banks.api_key_hash` key remains a full-bank credential for
+backward compatibility during migration.
 
 ### Migration verification
 

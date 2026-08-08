@@ -458,6 +458,26 @@ PY
         *) ow_fail "unknown V18 preflight gate" ;;
     esac
 
+    # Re-prove V19 while the deploy lock is held. Unlike V18 this is deliberately
+    # receipt-free: either no V19 state exists yet, or the exact successful
+    # source-checksum-matching migration already exists and can be retried.
+    v19_source="${APP_DIR}/src/main/resources/db/migration/V19__scoped_bank_api_credentials.sql"
+    [ -f "${v19_source}" ] && [ ! -L "${v19_source}" ] || ow_fail "reviewed V19 migration source is missing or unsafe"
+    expected_v19_checksum="$(python3 "${v18_checksum_tool}" "${v19_source}")"
+    [[ "${expected_v19_checksum}" =~ ^-?[0-9]+$ ]] || ow_fail "reviewed V19 Flyway checksum is invalid"
+    v19_count="$(pg_client psql -h "${IDENTITY_DB_HOST}" -p "${IDENTITY_DB_PORT:-5432}" -U "${IDENTITY_DB_USER}" -d "${IDENTITY_DB_NAME}" -Atqc "SELECT count(*) FROM flyway_schema_history WHERE version = '19'")"
+    v19_meta="$(pg_client psql -h "${IDENTITY_DB_HOST}" -p "${IDENTITY_DB_PORT:-5432}" -U "${IDENTITY_DB_USER}" -d "${IDENTITY_DB_NAME}" -Atqc "SELECT checksum::text || '|' || CASE WHEN success THEN 't' ELSE 'f' END FROM flyway_schema_history WHERE version = '19'")"
+    v19_objects="$(pg_client psql -h "${IDENTITY_DB_HOST}" -p "${IDENTITY_DB_PORT:-5432}" -U "${IDENTITY_DB_USER}" -d "${IDENTITY_DB_NAME}" -Atqc "SELECT count(*) FROM (SELECT 1 FROM pg_class WHERE oid=to_regclass('public.bank_api_credentials') UNION ALL SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='bank_api_credentials' AND ((column_name='id' AND data_type='bigint' AND is_nullable='NO' AND column_default LIKE 'nextval(%') OR (column_name='bank_id' AND data_type='bigint' AND is_nullable='NO' AND column_default IS NULL) OR (column_name='api_key_hash' AND data_type='character varying' AND is_nullable='NO' AND column_default IS NULL) OR (column_name='scope' AND data_type='character varying' AND is_nullable='NO' AND column_default IS NULL) OR (column_name='label' AND data_type='character varying' AND is_nullable='NO' AND column_default IS NULL) OR (column_name='active' AND data_type='boolean' AND is_nullable='NO' AND column_default='true') OR (column_name='revoked_at' AND data_type='timestamp with time zone' AND is_nullable='YES' AND column_default IS NULL) OR (column_name='created_at' AND data_type='timestamp with time zone' AND is_nullable='NO' AND column_default='now()') OR (column_name='created_by' AND data_type='character varying' AND is_nullable='YES' AND column_default IS NULL)) UNION ALL SELECT 1 FROM pg_indexes WHERE schemaname='public' AND tablename='bank_api_credentials' AND indexname='idx_bank_api_credentials_active_bank' AND indexdef LIKE '% (bank_id) WHERE (active = true)' UNION ALL SELECT 1 FROM pg_constraint WHERE conrelid=to_regclass('public.bank_api_credentials') AND conname IN ('fk_bank_api_credentials_bank','chk_bank_api_credentials_scope','chk_bank_api_credentials_lifecycle') UNION ALL SELECT 1 FROM pg_constraint WHERE conrelid=to_regclass('public.bank_api_credentials') AND contype IN ('p','u') AND pg_get_constraintdef(oid) IN ('PRIMARY KEY (id)','UNIQUE (api_key_hash)')) q")"
+    v19_gate="$(ow_evidence_field "${OW_VERIFIED_EVIDENCE_FILE}" v19_gate)"
+    case "${v19_gate}" in
+        first_deploy_absent) [ "${v19_count}" = 0 ] && [ "${v19_objects}" = 0 ] || ow_fail "V19 state changed after preflight" ;;
+        subsequent_complete)
+            [ "${v19_count}" = 1 ] && [ "${v19_objects}" = 16 ] && [[ "${v19_meta}" =~ ^-?[0-9]+\|t$ ]] \
+                && [ "${v19_meta%%|*}" = "${expected_v19_checksum}" ] || ow_fail "live V19 state is not the exact reviewed successful migration"
+            ;;
+        *) ow_fail "unknown V19 preflight gate" ;;
+    esac
+
     # Only the identity service. Rebuilding everything would restart the Astro
     # gateway and Caddy for a change that touches neither.
     # Build explicitly with the OCI revision argument. This works with both the
@@ -509,6 +529,12 @@ PY
     [ "${post_v18_count}" = 1 ] && [ "${post_v18_objects}" = 8 ] && [[ "${post_v18_meta}" =~ ^-?[0-9]+\|t$ ]] \
         && [ "${post_v18_meta%%|*}" = "${expected_v18_checksum}" ] \
         || ow_fail "post-start Identity V18 state is not one successful complete migration"
+    post_v19_count="$(pg_client psql -h "${IDENTITY_DB_HOST}" -p "${IDENTITY_DB_PORT:-5432}" -U "${IDENTITY_DB_USER}" -d "${IDENTITY_DB_NAME}" -Atqc "SELECT count(*) FROM flyway_schema_history WHERE version = '19'")"
+    post_v19_meta="$(pg_client psql -h "${IDENTITY_DB_HOST}" -p "${IDENTITY_DB_PORT:-5432}" -U "${IDENTITY_DB_USER}" -d "${IDENTITY_DB_NAME}" -Atqc "SELECT checksum::text || '|' || CASE WHEN success THEN 't' ELSE 'f' END FROM flyway_schema_history WHERE version = '19'")"
+    post_v19_objects="$(pg_client psql -h "${IDENTITY_DB_HOST}" -p "${IDENTITY_DB_PORT:-5432}" -U "${IDENTITY_DB_USER}" -d "${IDENTITY_DB_NAME}" -Atqc "SELECT count(*) FROM (SELECT 1 FROM pg_class WHERE oid=to_regclass('public.bank_api_credentials') UNION ALL SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='bank_api_credentials' AND ((column_name='id' AND data_type='bigint' AND is_nullable='NO' AND column_default LIKE 'nextval(%') OR (column_name='bank_id' AND data_type='bigint' AND is_nullable='NO' AND column_default IS NULL) OR (column_name='api_key_hash' AND data_type='character varying' AND is_nullable='NO' AND column_default IS NULL) OR (column_name='scope' AND data_type='character varying' AND is_nullable='NO' AND column_default IS NULL) OR (column_name='label' AND data_type='character varying' AND is_nullable='NO' AND column_default IS NULL) OR (column_name='active' AND data_type='boolean' AND is_nullable='NO' AND column_default='true') OR (column_name='revoked_at' AND data_type='timestamp with time zone' AND is_nullable='YES' AND column_default IS NULL) OR (column_name='created_at' AND data_type='timestamp with time zone' AND is_nullable='NO' AND column_default='now()') OR (column_name='created_by' AND data_type='character varying' AND is_nullable='YES' AND column_default IS NULL)) UNION ALL SELECT 1 FROM pg_indexes WHERE schemaname='public' AND tablename='bank_api_credentials' AND indexname='idx_bank_api_credentials_active_bank' AND indexdef LIKE '% (bank_id) WHERE (active = true)' UNION ALL SELECT 1 FROM pg_constraint WHERE conrelid=to_regclass('public.bank_api_credentials') AND conname IN ('fk_bank_api_credentials_bank','chk_bank_api_credentials_scope','chk_bank_api_credentials_lifecycle') UNION ALL SELECT 1 FROM pg_constraint WHERE conrelid=to_regclass('public.bank_api_credentials') AND contype IN ('p','u') AND pg_get_constraintdef(oid) IN ('PRIMARY KEY (id)','UNIQUE (api_key_hash)')) q")"
+    [ "${post_v19_count}" = 1 ] && [ "${post_v19_objects}" = 16 ] && [[ "${post_v19_meta}" =~ ^-?[0-9]+\|t$ ]] \
+        && [ "${post_v19_meta%%|*}" = "${expected_v19_checksum}" ] \
+        || ow_fail "post-start Identity V19 state is not one successful complete migration"
     [ "$(docker inspect -f '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "${cid}")" = "${DEPLOY_REF}" ] \
         || ow_fail "Identity container revision label does not equal the signed release SHA"
 

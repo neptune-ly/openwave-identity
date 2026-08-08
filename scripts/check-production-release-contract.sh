@@ -8,9 +8,12 @@ client="${repo_root}/openwave-ui/src/lib/api/client.js"
 customer="${repo_root}/openwave-ui/src/routes/portal/customer/+page.svelte"
 banks="${repo_root}/openwave-ui/src/routes/portal/banks/+page.svelte"
 reset_password="${repo_root}/openwave-ui/src/routes/reset-password/+page.svelte"
+login_page="${repo_root}/openwave-ui/src/routes/login/+page.svelte"
 asset_parser="${repo_root}/scripts/list-static-entry-assets.py"
 v18_recovery="${repo_root}/scripts/recover-v18-success-receipt.sh"
 v18_recovery_workflow="${repo_root}/.github/workflows/recover-v18-receipt.yml"
+preflight_workflow="${repo_root}/.github/workflows/production-preflight.yml"
+deploy_workflow="${repo_root}/.github/workflows/deploy-service.yml"
 
 require_literal() {
     local file="$1" literal="$2" message="$3"
@@ -20,8 +23,28 @@ require_literal() {
     }
 }
 
+reject_literal() {
+    local file="$1" literal="$2" message="$3"
+    if grep -Fq -- "${literal}" "${file}"; then
+        printf 'release contract failed: %s\n' "${message}" >&2
+        exit 1
+    fi
+}
+
 require_literal "${preflight}" '--clean --if-exists --no-owner --no-privileges --exit-on-error' \
     'the disposable PostgreSQL restore must fail on schema/data errors without requiring production roles or ACLs'
+# These are literal workflow expressions, not values to expand in this checker.
+# shellcheck disable=SC2016
+for workflow in "${preflight_workflow}" "${deploy_workflow}"; do
+    require_literal "${workflow}" 'test "${{ github.ref }}" = refs/heads/main' \
+        'production workflows must be dispatched from reviewed main'
+    require_literal "${workflow}" 'fetch-depth: 0' \
+        'production workflow checkout must include origin/main provenance'
+    require_literal "${workflow}" 'test "$(git rev-parse HEAD)" = "$RELEASE_SHA"' \
+        'production workflow must bind checkout HEAD to the requested SHA'
+    require_literal "${workflow}" 'test "$(git rev-parse refs/remotes/origin/main)" = "$RELEASE_SHA"' \
+        'production workflow must bind requested SHA to current origin/main'
+done
 require_literal "${preflight}" 'set -Eeuo pipefail' \
     'the production preflight must inherit its secret-safe ERR diagnostic into functions and command substitutions'
 require_literal "${preflight}" 'ERROR: failed phase=%s status=%s; no deployment was attempted' \
@@ -44,12 +67,26 @@ canonical_v18_meta_count="$((
     $(grep -Foc -- "${canonical_v18_meta}" "${preflight}" || true) +
     $(grep -Foc -- "${canonical_v18_meta}" "${deploy}" || true)
 ))"
-[ "${canonical_v18_meta_count}" -eq 3 ] || {
-    printf 'release contract failed: all three normal V18 gates must use the canonical t/f success projection\n' >&2
+[ "${canonical_v18_meta_count}" -eq 6 ] || {
+    printf 'release contract failed: all V18 and V19 normal gates must use the canonical t/f success projection\n' >&2
     exit 1
 }
 if grep -Fq -- "checksum || '|' || success" "${preflight}" "${deploy}" "${v18_recovery}"; then
     printf 'release contract failed: V18 gates must not rely on ambiguous implicit boolean concatenation\n' >&2
+    exit 1
+fi
+require_literal "${preflight}" 'V19 state is partial, drifted, or not an exact successful reviewed migration' \
+    'preflight must reject partial or drifted V19 state'
+require_literal "${preflight}" 'v19_gate=first_deploy_absent' \
+    'preflight must accept an entirely absent V19 row and schema before first deploy'
+require_literal "${preflight}" 'v19_gate=subsequent_complete' \
+    'preflight must accept exactly one completed, source-checksum-matching V19 migration on retry'
+require_literal "${deploy}" 'post-start Identity V19 state is not one successful complete migration' \
+    'deploy must prove V19 history, checksum, and schema shape after health before publishing'
+require_literal "${deploy}" 'V19 state changed after preflight' \
+    'deploy must recheck an absent V19 state under the deploy lock'
+if grep -Fq -- 'v19-success.receipt' "${preflight}" "${deploy}"; then
+    printf 'release contract failed: V19 must not introduce a one-shot receipt gate\n' >&2
     exit 1
 fi
 require_literal "${v18_recovery}" "${canonical_v18_meta}" \
@@ -194,6 +231,26 @@ require_literal "${banks}" 'role="alert"' \
     'the bank workspace must expose a terminal retry state'
 require_literal "${reset_password}" 'timeout: PORTAL_REQUEST_TIMEOUT_MS' \
     'password reset confirmation must have a bounded timeout'
+require_literal "${login_page}" "let mode      = \$state('customer');" \
+    'customer login must have a usable default lane instead of an inert unselected state'
+require_literal "${login_page}" 'const formData = new FormData(form);' \
+    'login submission must read browser/password-manager autofill from the native form'
+require_literal "${login_page}" 'name="username"' \
+    'the login identifier must be a form-associated autofill field'
+require_literal "${login_page}" 'name="password"' \
+    'the login password must be a form-associated autofill field'
+require_literal "${login_page}" 'autocomplete="current-password"' \
+    'the login password must advertise the current-password autofill contract'
+require_literal "${login_page}" 'autocomplete="one-time-code"' \
+    'the authenticator field must support native one-time-code autofill'
+require_literal "${login_page}" 'name="totp"' \
+    'the authenticator code must remain form-associated for password-manager autofill'
+require_literal "${login_page}" 'on:keydown={onTotpKey}' \
+    'the authenticator field must retain its explicit Enter-key verification path'
+require_literal "${login_page}" '<Button type="submit" class="w-full" disabled={loading || !mode}>' \
+    'the sign-in action must submit visibly autofilled values instead of depending on stale component state'
+reject_literal "${login_page}" 'on:click={connect}' \
+    'the sign-in button must not double-dispatch click and form-submit handlers'
 
 fixture_dir="$(mktemp -d)"
 trap 'rm -rf "${fixture_dir}"' EXIT

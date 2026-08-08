@@ -57,6 +57,45 @@ class BankEntity(
     var updatedAt: Instant = Instant.now()
 )
 
+/**
+ * A narrowly-scoped key issued in addition to a bank's immutable legacy key.
+ * The raw key is never an entity field: only its SHA-256 digest is persisted.
+ */
+enum class BankCredentialScope { ASTRO_REGISTRY }
+
+@Entity
+@Table(name = "bank_api_credentials")
+class BankApiCredentialEntity(
+    @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
+    val id: Long = 0,
+
+    @ManyToOne(fetch = FetchType.LAZY, optional = false)
+    @JoinColumn(name = "bank_id", nullable = false, foreignKey = ForeignKey(name = "fk_bank_api_credentials_bank"))
+    val bank: BankEntity,
+
+    @Column(name = "api_key_hash", nullable = false, unique = true, length = 64)
+    val apiKeyHash: String,
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "scope", nullable = false, length = 40)
+    val scope: BankCredentialScope,
+
+    @Column(name = "label", nullable = false, length = 120)
+    val label: String,
+
+    @Column(name = "active", nullable = false)
+    var active: Boolean = true,
+
+    @Column(name = "revoked_at")
+    var revokedAt: Instant? = null,
+
+    @Column(name = "created_at", nullable = false, updatable = false)
+    val createdAt: Instant = Instant.now(),
+
+    @Column(name = "created_by", length = 160)
+    val createdBy: String? = null
+)
+
 @Entity
 @Table(name = "portal_audit_events")
 class PortalAuditEventEntity(
