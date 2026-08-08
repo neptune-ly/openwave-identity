@@ -78,6 +78,7 @@ pg_client() {
 }
 
 ow_validate_release_sha "${DEPLOY_REF}"
+ow_require_command sha256sum
 [ -d "${RELEASE_WORKSPACE}/.git" ] || ow_fail "Actions release workspace is not a git checkout"
 [ "$(git -C "${RELEASE_WORKSPACE}" rev-parse HEAD)" = "${DEPLOY_REF}" ] \
     || ow_fail "Actions deploy checkout does not equal the immutable release SHA"
@@ -330,18 +331,35 @@ PY
     printf '%s:%s:*:%s:%s\n' "${IDENTITY_DB_HOST}" "${IDENTITY_DB_PORT:-5432}" "${IDENTITY_DB_USER}" "${IDENTITY_DB_PASSWORD}" >"${pgpass_file}"
     trap 'clear_git_url_rewrites; cleanup_pending_ui_backup; rm -f "${pgpass_file}" "${ui_asset_probe:-}"' EXIT
     v18_count="$(pg_client psql -h "${IDENTITY_DB_HOST}" -p "${IDENTITY_DB_PORT:-5432}" -U "${IDENTITY_DB_USER}" -d "${IDENTITY_DB_NAME}" -Atqc "SELECT count(*) FROM flyway_schema_history WHERE version = '18'")"
-    v18_meta="$(pg_client psql -h "${IDENTITY_DB_HOST}" -p "${IDENTITY_DB_PORT:-5432}" -U "${IDENTITY_DB_USER}" -d "${IDENTITY_DB_NAME}" -Atqc "SELECT checksum || '|' || success FROM flyway_schema_history WHERE version = '18'")"
+    v18_meta="$(pg_client psql -h "${IDENTITY_DB_HOST}" -p "${IDENTITY_DB_PORT:-5432}" -U "${IDENTITY_DB_USER}" -d "${IDENTITY_DB_NAME}" -Atqc "SELECT checksum::text || '|' || CASE WHEN success THEN 't' ELSE 'f' END FROM flyway_schema_history WHERE version = '18'")"
     v18_objects="$(pg_client psql -h "${IDENTITY_DB_HOST}" -p "${IDENTITY_DB_PORT:-5432}" -U "${IDENTITY_DB_USER}" -d "${IDENTITY_DB_NAME}" -Atqc "SELECT count(*) FROM (SELECT 1 FROM pg_class WHERE oid=to_regclass('public.retired_handles') UNION ALL SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name IN ('retired_handles','npt_identities') AND column_name IN ('handle_renamed_at','handle_rename_count','handle','former_identity_id') UNION ALL SELECT 1 FROM pg_indexes WHERE schemaname='public' AND tablename='retired_handles' AND indexname IN ('idx_retired_handles_former_identity','idx_retired_handles_retired_at') UNION ALL SELECT 1 FROM pg_constraint WHERE conrelid=to_regclass('public.retired_handles') AND conname='chk_retired_handle_canonical') q")"
     v18_fingerprint="$(pg_client psql -h "${IDENTITY_DB_HOST}" -p "${IDENTITY_DB_PORT:-5432}" -U "${IDENTITY_DB_USER}" -d "${IDENTITY_DB_NAME}" -Atqc "SELECT md5(coalesce(string_agg(item, '|' ORDER BY item), '')) FROM (SELECT 'table:' || relname AS item FROM pg_class WHERE oid=to_regclass('public.retired_handles') UNION ALL SELECT 'column:' || column_name || ':' || data_type || ':' || is_nullable FROM information_schema.columns WHERE table_schema='public' AND table_name IN ('retired_handles','npt_identities') AND column_name IN ('handle_renamed_at','handle_rename_count','handle','former_identity_id') UNION ALL SELECT 'index:' || indexname || ':' || indexdef FROM pg_indexes WHERE schemaname='public' AND tablename='retired_handles' AND indexname IN ('idx_retired_handles_former_identity','idx_retired_handles_retired_at') UNION ALL SELECT 'constraint:' || conname || ':' || pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid=to_regclass('public.retired_handles') AND conname='chk_retired_handle_canonical') q")"
+    v18_row_fingerprint="$(printf '%s' "${v18_meta}" | sha256sum | awk '{print $1}')"
+    v18_source="${APP_DIR}/src/main/resources/db/migration/V18__handle_rename_and_retirement.sql"
+    v18_checksum_tool="${APP_DIR}/scripts/flyway-sql-checksum.py"
+    [ -f "${v18_source}" ] && [ ! -L "${v18_source}" ] || ow_fail "reviewed V18 migration source is missing or unsafe"
+    [ -f "${v18_checksum_tool}" ] && [ ! -L "${v18_checksum_tool}" ] || ow_fail "reviewed Flyway checksum tool is missing or unsafe"
+    v18_source_sha256="$(ow_sha256_file "${v18_source}")"
+    expected_v18_checksum="$(python3 "${v18_checksum_tool}" "${v18_source}")"
+    [[ "${expected_v18_checksum}" =~ ^-?[0-9]+$ ]] || ow_fail "reviewed V18 Flyway checksum is invalid"
     v18_gate="$(ow_evidence_field "${OW_VERIFIED_EVIDENCE_FILE}" v18_gate)"
     case "${v18_gate}" in
         first_deploy_absent) [ "${v18_count}" = 0 ] && [ "${v18_objects}" = 0 ] || ow_fail "V18 state changed after preflight" ;;
         subsequent_receipted)
             [ "${v18_count}" = 1 ] && [ "${v18_objects}" = 8 ] && [[ "${v18_meta}" =~ ^-?[0-9]+\|t$ ]] || ow_fail "V18 success receipt no longer matches live schema"
+            [ "${v18_meta%%|*}" = "${expected_v18_checksum}" ] || ow_fail "live V18 Flyway checksum does not match the reviewed migration source"
             receipt="${EVIDENCE_DIR}/v18-success.receipt"
             ow_verify_evidence_signature "${PREFLIGHT_ATTESTATION_KEY_FILE}" "${receipt}" "${receipt}.sig"
             ow_require_evidence_value "${receipt}" flyway_checksum "${v18_meta%%|*}"
+            ow_require_evidence_value "${receipt}" v18_row_fingerprint "${v18_row_fingerprint}"
             ow_require_evidence_value "${receipt}" object_fingerprint "${v18_fingerprint}"
+            ow_require_evidence_value "${receipt}" source_migration_sha256 "${v18_source_sha256}"
+            receipt_release_sha="$(ow_evidence_field "${receipt}" release_sha)"
+            receipt_checkout_sha="$(ow_evidence_field "${receipt}" production_checkout_sha)"
+            receipt_oci_revision="$(ow_evidence_field "${receipt}" oci_revision)"
+            ow_validate_release_sha "${receipt_release_sha}"
+            [ "${receipt_checkout_sha}" = "${receipt_release_sha}" ] && [ "${receipt_oci_revision}" = "${receipt_release_sha}" ] \
+                || ow_fail "V18 receipt release, checkout, and OCI revision do not agree"
             ;;
         *) ow_fail "unknown V18 preflight gate" ;;
     esac
@@ -390,10 +408,12 @@ PY
     # started and Flyway has actually applied the migration. Re-query the live
     # database here rather than carrying pre-deploy observations forward.
     post_v18_count="$(pg_client psql -h "${IDENTITY_DB_HOST}" -p "${IDENTITY_DB_PORT:-5432}" -U "${IDENTITY_DB_USER}" -d "${IDENTITY_DB_NAME}" -Atqc "SELECT count(*) FROM flyway_schema_history WHERE version = '18'")"
-    post_v18_meta="$(pg_client psql -h "${IDENTITY_DB_HOST}" -p "${IDENTITY_DB_PORT:-5432}" -U "${IDENTITY_DB_USER}" -d "${IDENTITY_DB_NAME}" -Atqc "SELECT checksum || '|' || success FROM flyway_schema_history WHERE version = '18'")"
+    post_v18_meta="$(pg_client psql -h "${IDENTITY_DB_HOST}" -p "${IDENTITY_DB_PORT:-5432}" -U "${IDENTITY_DB_USER}" -d "${IDENTITY_DB_NAME}" -Atqc "SELECT checksum::text || '|' || CASE WHEN success THEN 't' ELSE 'f' END FROM flyway_schema_history WHERE version = '18'")"
     post_v18_objects="$(pg_client psql -h "${IDENTITY_DB_HOST}" -p "${IDENTITY_DB_PORT:-5432}" -U "${IDENTITY_DB_USER}" -d "${IDENTITY_DB_NAME}" -Atqc "SELECT count(*) FROM (SELECT 1 FROM pg_class WHERE oid=to_regclass('public.retired_handles') UNION ALL SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name IN ('retired_handles','npt_identities') AND column_name IN ('handle_renamed_at','handle_rename_count','handle','former_identity_id') UNION ALL SELECT 1 FROM pg_indexes WHERE schemaname='public' AND tablename='retired_handles' AND indexname IN ('idx_retired_handles_former_identity','idx_retired_handles_retired_at') UNION ALL SELECT 1 FROM pg_constraint WHERE conrelid=to_regclass('public.retired_handles') AND conname='chk_retired_handle_canonical') q")"
     post_v18_fingerprint="$(pg_client psql -h "${IDENTITY_DB_HOST}" -p "${IDENTITY_DB_PORT:-5432}" -U "${IDENTITY_DB_USER}" -d "${IDENTITY_DB_NAME}" -Atqc "SELECT md5(coalesce(string_agg(item, '|' ORDER BY item), '')) FROM (SELECT 'table:' || relname AS item FROM pg_class WHERE oid=to_regclass('public.retired_handles') UNION ALL SELECT 'column:' || column_name || ':' || data_type || ':' || is_nullable FROM information_schema.columns WHERE table_schema='public' AND table_name IN ('retired_handles','npt_identities') AND column_name IN ('handle_renamed_at','handle_rename_count','handle','former_identity_id') UNION ALL SELECT 'index:' || indexname || ':' || indexdef FROM pg_indexes WHERE schemaname='public' AND tablename='retired_handles' AND indexname IN ('idx_retired_handles_former_identity','idx_retired_handles_retired_at') UNION ALL SELECT 'constraint:' || conname || ':' || pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid=to_regclass('public.retired_handles') AND conname='chk_retired_handle_canonical') q")"
+    post_v18_row_fingerprint="$(printf '%s' "${post_v18_meta}" | sha256sum | awk '{print $1}')"
     [ "${post_v18_count}" = 1 ] && [ "${post_v18_objects}" = 8 ] && [[ "${post_v18_meta}" =~ ^-?[0-9]+\|t$ ]] \
+        && [ "${post_v18_meta%%|*}" = "${expected_v18_checksum}" ] \
         || ow_fail "post-start Identity V18 state is not one successful complete migration"
     [ "$(docker inspect -f '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "${cid}")" = "${DEPLOY_REF}" ] \
         || ow_fail "Identity container revision label does not equal the signed release SHA"
@@ -407,7 +427,8 @@ PY
         receipt="${EVIDENCE_DIR}/v18-success.receipt"
         umask 077
         flyway_checksum="${post_v18_meta%%|*}"
-        printf 'v18_success=true\nrelease_sha=%s\nrecorded_at_epoch=%s\nflyway_checksum=%s\nobject_fingerprint=%s\n' "${DEPLOY_REF}" "$(date +%s)" "${flyway_checksum}" "${post_v18_fingerprint}" >"${receipt}"
+        printf 'v18_success=true\nrelease_sha=%s\nrecovered_from_failed_deploy=false\nrecovery_reason=none\nrecorded_at_epoch=%s\nproduction_checkout_sha=%s\noci_revision=%s\nflyway_checksum=%s\nv18_row_fingerprint=%s\nsource_migration_sha256=%s\nobject_fingerprint=%s\n' \
+            "${DEPLOY_REF}" "$(date +%s)" "${DEPLOY_REF}" "${DEPLOY_REF}" "${flyway_checksum}" "${post_v18_row_fingerprint}" "${v18_source_sha256}" "${post_v18_fingerprint}" >"${receipt}"
         ow_sign_evidence "${PREFLIGHT_ATTESTATION_KEY_FILE}" "${receipt}" "${receipt}.sig"
         log "Recorded signed V18 success receipt for subsequent deploy gates."
     fi
