@@ -17,9 +17,10 @@ RUNTIME_DIR="${RUNTIME_DIR:-${COMPOSE_DIR}/.env.openwave-release}"
 EVIDENCE_DIR="${EVIDENCE_DIR:-${RUNTIME_DIR}/release-evidence/identity}"
 PREFLIGHT_ATTESTATION_KEY_FILE="${PREFLIGHT_ATTESTATION_KEY_FILE:-/opt/openwave/secrets/preflight-attestation.key}"
 LOCK_FILE="${LOCK_FILE:-${COMPOSE_DIR}/.openwave-prod-deploy.lock}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # shellcheck disable=SC1091
-source "$(dirname "$0")/openwave-prod-evidence-lib.sh"
+source "${SCRIPT_DIR}/openwave-prod-evidence-lib.sh"
 
 recovery_phase=bootstrap
 pgpass_file=""
@@ -137,7 +138,7 @@ ow_require_secret_file "${PREFLIGHT_ATTESTATION_KEY_FILE}" "preflight attestatio
     [ "${production_checkout_sha}" = "${FAILED_DEPLOY_SHA}" ] \
         || ow_fail "production checkout does not equal the failed deploy SHA"
     v18_source="${APP_DIR}/src/main/resources/db/migration/V18__handle_rename_and_retirement.sql"
-    v18_checksum_tool="$(dirname "$0")/flyway-sql-checksum.py"
+    v18_checksum_tool="${SCRIPT_DIR}/flyway-sql-checksum.py"
     [ -f "${v18_source}" ] && [ ! -L "${v18_source}" ] \
         || ow_fail "failed release V18 migration source is missing or unsafe"
     [ -f "${v18_checksum_tool}" ] && [ ! -L "${v18_checksum_tool}" ] \
