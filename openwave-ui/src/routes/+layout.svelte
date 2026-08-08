@@ -8,8 +8,7 @@
 
   onMount(() => {
     theme.init();
-    const timer = setTimeout(() => booting = false, 1350);
-    return () => clearTimeout(timer);
+    booting = false;
   });
 </script>
 

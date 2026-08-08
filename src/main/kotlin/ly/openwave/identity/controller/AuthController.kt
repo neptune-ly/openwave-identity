@@ -231,15 +231,28 @@ class AuthController(
         mapOf("options" to portalSecurityService.startAuthentication(request))
 
     @PostMapping("/passkey/authenticate")
-    fun passkeyAuthenticate(@Valid @RequestBody req: PortalWebAuthnAuthenticateFinishRequest): ResponseEntity<*> =
-        try {
+    fun passkeyAuthenticate(@Valid @RequestBody req: PortalWebAuthnAuthenticateFinishRequest): ResponseEntity<*> {
+        return try {
             val user = portalSecurityService.finishAuthentication(req)
             val coarseRole = coarseRoleFor(user.role)
+            val requestedRole = req.role?.trim()?.uppercase()
+            if (requestedRole != null && requestedRole != coarseRole) {
+                return ResponseEntity.status(HttpStatus.CONFLICT).body(
+                    mapOf(
+                        "code" to "ROLE_MISMATCH",
+                        "message" to "This account belongs to a different portal lane.",
+                        "expectedRole" to coarseRole,
+                        "portalRole" to user.role.name,
+                        "username" to user.username
+                    )
+                )
+            }
             ResponseEntity.ok(sessionLoginResponse(user, coarseRole))
         } catch (e: Exception) {
             ResponseEntity.status(HttpStatus.UNAUTHORIZED)
                 .body(mapOf("error" to "Passkey authentication failed. Please try again."))
         }
+    }
 
     @PostMapping("/passkey/options/register")
     fun passkeyRegisterOptions(
