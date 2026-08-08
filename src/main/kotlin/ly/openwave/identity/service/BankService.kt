@@ -92,7 +92,9 @@ class BankService(
 
     fun resolveApiKeyAuthentication(apiKey: String): BankApiKeyAuthentication? {
         val hash = sha256(apiKey)
-        bankRepo.findByApiKeyHash(hash)?.let { return BankApiKeyAuthentication(it, null) }
+        bankRepo.findByApiKeyHash(hash)?.let {
+            if (it.legacyApiKeyActive) return BankApiKeyAuthentication(it, null)
+        }
         val credential = credentialRepo.findByApiKeyHashAndActiveTrue(hash) ?: return null
         if (credential.revokedAt != null || !credential.bank.active) return null
         return BankApiKeyAuthentication(credential.bank, credential.scope)

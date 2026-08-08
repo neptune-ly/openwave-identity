@@ -254,6 +254,23 @@ ow_require_secret_file "${PREFLIGHT_ATTESTATION_KEY_FILE}" "preflight attestatio
     fi
     ow_log "Identity V19 state: history_rows=${v19_count:-invalid} objects=${v19_objects:-invalid} gate=${v19_gate}"
 
+    mark_preflight_phase v20-state
+    v20_source="${RELEASE_WORKSPACE}/src/main/resources/db/migration/V20__rotatable_legacy_bank_credentials.sql"
+    [ -f "${v20_source}" ] && [ ! -L "${v20_source}" ] || ow_fail "reviewed V20 migration source is missing or unsafe"
+    expected_v20_checksum="$(python3 "${v18_checksum_tool}" "${v20_source}")"
+    [[ "${expected_v20_checksum}" =~ ^-?[0-9]+$ ]] || ow_fail "reviewed V20 Flyway checksum is invalid"
+    v20_count="$(pg_client psql -h "${IDENTITY_DB_HOST}" -p "${IDENTITY_DB_PORT:-5432}" -U "${IDENTITY_DB_USER}" -d "${IDENTITY_DB_NAME}" -Atqc "SELECT count(*) FROM flyway_schema_history WHERE version = '20'")"
+    v20_meta="$(pg_client psql -h "${IDENTITY_DB_HOST}" -p "${IDENTITY_DB_PORT:-5432}" -U "${IDENTITY_DB_USER}" -d "${IDENTITY_DB_NAME}" -Atqc "SELECT checksum::text || '|' || CASE WHEN success THEN 't' ELSE 'f' END FROM flyway_schema_history WHERE version = '20'")"
+    v20_objects="$(pg_client psql -h "${IDENTITY_DB_HOST}" -p "${IDENTITY_DB_PORT:-5432}" -U "${IDENTITY_DB_USER}" -d "${IDENTITY_DB_NAME}" -Atqc "SELECT count(*) FROM (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='registered_banks' AND column_name='legacy_api_key_active' AND data_type='boolean' AND is_nullable='NO' AND column_default='true' UNION ALL SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='registered_banks' AND column_name='legacy_api_key_deactivated_at' AND data_type='timestamp with time zone' AND is_nullable='YES' AND column_default IS NULL UNION ALL SELECT 1 FROM pg_constraint WHERE conrelid=to_regclass('public.bank_api_credentials') AND conname='chk_bank_api_credentials_scope' AND pg_get_constraintdef(oid) LIKE '%ASTRO_REGISTRY%' AND pg_get_constraintdef(oid) LIKE '%FULL_BANK%') q")"
+    if [ "${v20_count}" = 0 ] && [ "${v20_objects}" = 0 ]; then
+        v20_gate=first_deploy_absent
+    elif [ "${v20_count}" = 1 ] && [ "${v20_objects}" = 3 ] && [[ "${v20_meta}" =~ ^-?[0-9]+\|t$ ]] \
+        && [ "${v20_meta%%|*}" = "${expected_v20_checksum}" ]; then
+        v20_gate=subsequent_complete
+    else
+        ow_fail "V20 state is partial, drifted, or not an exact successful reviewed migration"
+    fi
+
     mark_preflight_phase signed-attestation
     evidence_tmp="$(mktemp "${EVIDENCE_DIR}/.${RELEASE_SHA}.XXXXXX")"
     cat >"${evidence_tmp}" <<EOF
@@ -275,6 +292,8 @@ v18_gate=${v18_gate}
 v18_object_fingerprint=${v18_fingerprint}
 v19_gate=${v19_gate}
 v19_checksum=${expected_v19_checksum}
+v20_gate=${v20_gate}
+v20_checksum=${expected_v20_checksum}
 EOF
     ow_sign_evidence "${PREFLIGHT_ATTESTATION_KEY_FILE}" "${evidence_tmp}" "${evidence_tmp}.sig"
     mv -f "${evidence_tmp}" "${EVIDENCE_DIR}/${RELEASE_SHA}.attestation"

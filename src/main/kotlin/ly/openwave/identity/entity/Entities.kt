@@ -41,6 +41,12 @@ class BankEntity(
     @Column(name = "api_key_hash", nullable = false, length = 64)
     val apiKeyHash: String,
 
+    @Column(name = "legacy_api_key_active", nullable = false)
+    var legacyApiKeyActive: Boolean = true,
+
+    @Column(name = "legacy_api_key_deactivated_at")
+    var legacyApiKeyDeactivatedAt: Instant? = null,
+
     @Column(name = "portal_username", unique = true, length = 80)
     var portalUsername: String? = null,
 
@@ -61,7 +67,7 @@ class BankEntity(
  * A narrowly-scoped key issued in addition to a bank's immutable legacy key.
  * The raw key is never an entity field: only its SHA-256 digest is persisted.
  */
-enum class BankCredentialScope { ASTRO_REGISTRY }
+enum class BankCredentialScope { ASTRO_REGISTRY, FULL_BANK }
 
 @Entity
 @Table(name = "bank_api_credentials")

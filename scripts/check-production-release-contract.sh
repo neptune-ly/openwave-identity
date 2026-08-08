@@ -14,6 +14,7 @@ v18_recovery="${repo_root}/scripts/recover-v18-success-receipt.sh"
 v18_recovery_workflow="${repo_root}/.github/workflows/recover-v18-receipt.yml"
 preflight_workflow="${repo_root}/.github/workflows/production-preflight.yml"
 deploy_workflow="${repo_root}/.github/workflows/deploy-service.yml"
+full_bank_issue_workflow="${repo_root}/.github/workflows/issue-full-bank-credential.yml"
 
 require_literal() {
     local file="$1" literal="$2" message="$3"
@@ -67,8 +68,8 @@ canonical_v18_meta_count="$((
     $(grep -Foc -- "${canonical_v18_meta}" "${preflight}" || true) +
     $(grep -Foc -- "${canonical_v18_meta}" "${deploy}" || true)
 ))"
-[ "${canonical_v18_meta_count}" -eq 6 ] || {
-    printf 'release contract failed: all V18 and V19 normal gates must use the canonical t/f success projection\n' >&2
+[ "${canonical_v18_meta_count}" -eq 9 ] || {
+    printf 'release contract failed: all V18, V19, and V20 normal gates must use the canonical t/f success projection\n' >&2
     exit 1
 }
 if grep -Fq -- "checksum || '|' || success" "${preflight}" "${deploy}" "${v18_recovery}"; then
@@ -87,6 +88,66 @@ require_literal "${deploy}" 'V19 state changed after preflight' \
     'deploy must recheck an absent V19 state under the deploy lock'
 if grep -Fq -- 'v19-success.receipt' "${preflight}" "${deploy}"; then
     printf 'release contract failed: V19 must not introduce a one-shot receipt gate\n' >&2
+    exit 1
+fi
+require_literal "${preflight}" 'V20 state is partial, drifted, or not an exact successful reviewed migration' \
+    'preflight must reject partial or drifted V20 state'
+require_literal "${deploy}" 'post-start Identity V20 state is not one successful complete migration' \
+    'deploy must prove V20 checksum and schema shape after health before publishing'
+if grep -Fq -- 'v20-success.receipt' "${preflight}" "${deploy}"; then
+    printf 'release contract failed: V20 must not introduce a one-shot receipt gate\n' >&2
+    exit 1
+fi
+require_literal "${full_bank_issue_workflow}" 'scope FULL_BANK' \
+    'full-bank rotation issuance must request an explicit full-bank scope'
+# Literal shell target guard; do not expand it in this checker.
+# shellcheck disable=SC2016
+require_literal "${full_bank_issue_workflow}" 'test "$BANK_HANDLE" = andalus' \
+    'full-bank rotation issuance must enforce the fixed Andalus target in shell, not only the UI choice'
+require_literal "${full_bank_issue_workflow}" '.bankHandle == "andalus"' \
+    'full-bank rotation issuance must bind the raw response to Andalus before encryption'
+require_literal "${full_bank_issue_workflow}" 'openssl pkeyutl -encrypt' \
+    'full-bank rotation issuance must encrypt the one-time raw credential'
+require_literal "${full_bank_issue_workflow}" 'rsa_padding_mode:oaep' \
+    'full-bank rotation issuance must use OAEP padding'
+# Literal workflow cleanup expression; do not expand it in this checker.
+# shellcheck disable=SC2016
+require_literal "${full_bank_issue_workflow}" 'rm -f "$workdir/raw-key" "$workdir/response.json"' \
+    'full-bank rotation issuance must remove raw key material before artifact publication'
+require_literal "${full_bank_issue_workflow}" 'full-bank-credential-ciphertext.base64' \
+    'full-bank rotation issuance must publish only encrypted credential material'
+# Literal JSON expression; do not expand it in this checker.
+# shellcheck disable=SC2016
+require_literal "${full_bank_issue_workflow}" 'fingerprintSha256:$fingerprintSha256' \
+    'full-bank rotation metadata must bind the exact replacement credential fingerprint'
+require_literal "${full_bank_issue_workflow}" "jq -jr '.bankApiKey'" \
+    'full-bank rotation must extract raw key bytes without a JSON newline'
+# Literal shell fingerprint expression; do not expand it in this checker.
+# shellcheck disable=SC2016
+require_literal "${full_bank_issue_workflow}" 'key_fingerprint="$(sha256sum "$workdir/raw-key"' \
+    'full-bank rotation fingerprint must be calculated from exact raw key bytes'
+require_literal "${full_bank_issue_workflow}" 'full-bank-credential-metadata.base64' \
+    'full-bank rotation must publish deterministic base64 metadata for Nexus verification'
+require_literal "${full_bank_issue_workflow}" 'secrets.NEXUS_IDENTITY_CUTOVER_RSA_PUBLIC_KEY_B64' \
+    'full-bank rotation issuance must use the administrator-pinned Nexus recipient key'
+require_literal "${full_bank_issue_workflow}" 'vars.NEXUS_IDENTITY_CUTOVER_RSA_PUBLIC_KEY_SHA256' \
+    'full-bank rotation issuance must verify the pinned Nexus recipient key fingerprint'
+require_literal "${full_bank_issue_workflow}" 'OPENWAVE_NEXUS_CUTOVER_ATTESTATION_KEY' \
+    'full-bank rotation metadata must use the shared Nexus cutover attestation key'
+# Literal workflow invocation; do not expand it in this checker.
+# shellcheck disable=SC2016
+require_literal "${full_bank_issue_workflow}" 'curl --config "$workdir/curl.conf"' \
+    'full-bank rotation issuance must keep the registry key out of command arguments'
+require_literal "${full_bank_issue_workflow}" 'hmac.new(key, metadata, hashlib.sha256)' \
+    'full-bank rotation metadata must calculate HMAC from a key file, not command arguments'
+reject_literal "${full_bank_issue_workflow}" 'recipient_rsa_public_key_base64' \
+    'full-bank rotation issuance must not accept a caller-supplied recipient key'
+if grep -Fq -- 'legacy-credential/deactivate' "${repo_root}/.github/workflows"/*.yml; then
+    printf 'release contract failed: legacy deactivation requires a verifiable Nexus receipt workflow, not a self-asserted dispatch input\n' >&2
+    exit 1
+fi
+if rg -q 'legacy-credential/deactivate|deactivateLegacyCredential' "${repo_root}/src/main/kotlin"; then
+    printf 'release contract failed: V20 must not expose legacy credential deactivation before Nexus receipt verification exists\n' >&2
     exit 1
 fi
 require_literal "${v18_recovery}" "${canonical_v18_meta}" \

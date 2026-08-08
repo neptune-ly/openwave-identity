@@ -255,6 +255,13 @@ keys can use only Astro's registry routes. The original
 `registered_banks.api_key_hash` key remains a full-bank credential for
 backward compatibility during migration.
 
+For a compromised original bank key, issue an additive `FULL_BANK`
+credential and configure the bank caller with that replacement while the
+original remains valid. V20 deliberately has no callable legacy-deactivation
+operation: that path is deferred until Identity can verify Nexus's signed
+receipt binding the bank, replacement credential fingerprint, revision,
+effective-key proof, and harmless Identity probe.
+
 ### Migration verification
 
 The ordinary test suite does not require Docker or a local PostgreSQL process.
