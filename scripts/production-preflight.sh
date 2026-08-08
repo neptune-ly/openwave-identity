@@ -170,9 +170,28 @@ ow_require_secret_file "${PREFLIGHT_ATTESTATION_KEY_FILE}" "preflight attestatio
     docker run -d --rm --name "${restore_name}" -e POSTGRES_PASSWORD=restore-only postgres:16-alpine >/dev/null
     cleanup_restore() { docker rm -f "${restore_name}" >/dev/null 2>&1 || true; }
     trap 'cleanup_restore; cleanup_credentials' EXIT
-    for _ in $(seq 1 30); do docker exec "${restore_name}" pg_isready -U postgres >/dev/null 2>&1 && break; sleep 1; done
+    # The official image starts a temporary init server before exec'ing the
+    # final PostgreSQL process as PID 1. pg_isready alone can succeed during
+    # that temporary window and then race createdb against the handoff.
+    for _ in $(seq 1 30); do
+        if [ "$(docker exec "${restore_name}" cat /proc/1/comm 2>/dev/null || true)" = postgres ] \
+            && docker exec "${restore_name}" pg_isready -U postgres >/dev/null 2>&1; then
+            break
+        fi
+        sleep 1
+    done
+    if [ "$(docker exec "${restore_name}" cat /proc/1/comm 2>/dev/null || true)" != postgres ]; then
+        ow_fail "isolated PostgreSQL final server did not take PID 1"
+    fi
     if ! docker exec "${restore_name}" pg_isready -U postgres >/dev/null 2>&1; then
         ow_fail "isolated PostgreSQL restore did not become ready"
+    fi
+    sleep 1
+    if [ "$(docker exec "${restore_name}" cat /proc/1/comm 2>/dev/null || true)" != postgres ]; then
+        ow_fail "isolated PostgreSQL final server lost PID 1 after stability delay"
+    fi
+    if ! docker exec "${restore_name}" pg_isready -U postgres >/dev/null 2>&1; then
+        ow_fail "isolated PostgreSQL restore lost readiness after stability delay"
     fi
     restore_database="identity_restore_ci_${stamp}"
     docker exec "${restore_name}" createdb -U postgres "${restore_database}"
