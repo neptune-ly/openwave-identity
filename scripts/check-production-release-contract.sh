@@ -54,6 +54,12 @@ require_literal "${preflight}" 'ERROR: failed phase=%s status=%s; no deployment 
 # shellcheck disable=SC2016
 require_literal "${preflight}" 'if ! docker exec "${restore_name}" pg_isready -U postgres >/dev/null 2>&1; then' \
     'the isolated restore readiness failure must have an explicit terminal error path'
+require_literal "${preflight}" 'cat /proc/1/comm' \
+    'isolated PostgreSQL readiness must distinguish the final PID-1 server from its temporary init server'
+require_literal "${preflight}" 'isolated PostgreSQL final server lost PID 1 after stability delay' \
+    'isolated PostgreSQL readiness must recheck the final server after a stability delay'
+require_literal "${preflight}" 'isolated PostgreSQL restore lost readiness after stability delay' \
+    'isolated PostgreSQL readiness must recheck authenticated readiness after the PID-1 stability delay'
 preflight_phase_count="$(grep -Fc -- 'mark_preflight_phase ' "${preflight}" || true)"
 [ "${preflight_phase_count}" -ge 10 ] || {
     printf 'release contract failed: the production preflight must label every major secret-safe proof phase\n' >&2
