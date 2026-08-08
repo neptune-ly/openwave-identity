@@ -86,12 +86,12 @@
         {/if}
 
         {#if done}
-          <Button class="w-full" on:click={() => goto('/login')}>Go to sign in</Button>
+          <Button class="w-full" onclick={() => goto('/login')}>Go to sign in</Button>
         {:else if !login || !token}
           <p class="identity-auth-alert identity-auth-alert--warn identity-auth-compact">
             This reset link is invalid or incomplete. Request a new link from the sign-in page.
           </p>
-          <Button class="w-full" on:click={() => goto('/login')}>Back to sign in</Button>
+          <Button class="w-full" onclick={() => goto('/login')}>Back to sign in</Button>
         {:else}
           <div class="space-y-4">
             <div class="space-y-1.5">
@@ -115,10 +115,10 @@
               />
             </div>
 
-            <Button class="w-full" on:click={submit} disabled={!canSubmit}>
+            <Button class="w-full" onclick={submit} disabled={!canSubmit}>
               {loading ? 'Resetting...' : 'Reset password'}
             </Button>
-            <Button class="w-full" variant="outline" on:click={() => goto('/login')} disabled={loading}>
+            <Button class="w-full" variant="outline" onclick={() => goto('/login')} disabled={loading}>
               Back to sign in
             </Button>
           </div>

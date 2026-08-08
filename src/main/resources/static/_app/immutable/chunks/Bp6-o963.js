@@ -1,0 +1,1 @@
+import{vt as e}from"./VrSHB8Du.js";e();

@@ -738,7 +738,7 @@
                 </label>
                 <div class="mt-4 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
                   <button type="button" onclick={() => { renameConfirming = false; renameCustomerConfirmed = false; }} disabled={renameSubmitting} class="identity-shell-button min-h-12 rounded-2xl border px-5 text-[13px] font-semibold disabled:opacity-40">Go back</button>
-                  <button type="button" onclick={submitRename} disabled={renameSubmitting || !renameCustomerConfirmed} class="min-h-12 rounded-2xl bg-cyan-500 px-5 text-[13px] font-bold text-slate-950 transition hover:bg-cyan-400 disabled:opacity-40">
+                  <button type="button" onclick={submitRename} disabled={renameSubmitting || !renameCustomerConfirmed} class="identity-primary-action min-h-12 rounded-2xl bg-cyan-500 px-5 text-[13px] font-bold text-slate-950 transition hover:bg-cyan-400 disabled:opacity-40">
                     {renameSubmitting ? 'Renaming…' : 'Rename and retire old handle'}
                   </button>
                 </div>
@@ -774,7 +774,7 @@
                 type="button"
                 onclick={reviewRename}
                 disabled={!isBank || renameSubmitting || renameChecking || renameAvailability !== 'available' || !renameCurrentHandle.trim() || renameNationalId.length !== 12}
-                class="min-h-12 rounded-2xl bg-cyan-500 px-5 text-[13px] font-bold text-slate-950 transition hover:bg-cyan-400 disabled:opacity-40"
+                class="identity-primary-action min-h-12 rounded-2xl bg-cyan-500 px-5 text-[13px] font-bold text-slate-950 transition hover:bg-cyan-400 disabled:opacity-40"
               >
                 {current.submitLabel}
               </button>

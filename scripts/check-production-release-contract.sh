@@ -9,7 +9,9 @@ customer="${repo_root}/openwave-ui/src/routes/portal/customer/+page.svelte"
 banks="${repo_root}/openwave-ui/src/routes/portal/banks/+page.svelte"
 reset_password="${repo_root}/openwave-ui/src/routes/reset-password/+page.svelte"
 login_page="${repo_root}/openwave-ui/src/routes/login/+page.svelte"
+portal_login="${repo_root}/openwave-ui/src/lib/components/auth/PortalLogin.svelte"
 asset_parser="${repo_root}/scripts/list-static-entry-assets.py"
+odyssey_contract="${repo_root}/scripts/check-odyssey-2-21-1-contract.sh"
 v18_recovery="${repo_root}/scripts/recover-v18-success-receipt.sh"
 v18_recovery_workflow="${repo_root}/.github/workflows/recover-v18-receipt.yml"
 preflight_workflow="${repo_root}/.github/workflows/production-preflight.yml"
@@ -298,26 +300,56 @@ require_literal "${banks}" 'role="alert"' \
     'the bank workspace must expose a terminal retry state'
 require_literal "${reset_password}" 'timeout: PORTAL_REQUEST_TIMEOUT_MS' \
     'password reset confirmation must have a bounded timeout'
-require_literal "${login_page}" "let mode      = \$state('customer');" \
-    'customer login must have a usable default lane instead of an inert unselected state'
-require_literal "${login_page}" 'const formData = new FormData(form);' \
+require_literal "${login_page}" "href: '/login/customer'" \
+    'the shared login URL must offer a dedicated customer sign-in route'
+require_literal "${login_page}" "href: '/login/bank'" \
+    'the shared login URL must offer a dedicated bank sign-in route'
+require_literal "${login_page}" "href: '/login/admin'" \
+    'the shared login URL must offer a dedicated registry-admin sign-in route'
+# shellcheck disable=SC2016 # These are literal Svelte source contracts, not shell substitutions.
+require_literal "${login_page}" 'goto(`/login/${role}' \
+    'legacy role query URLs must redirect to the matching dedicated sign-in route'
+# shellcheck disable=SC2016 # These are literal Svelte source contracts, not shell substitutions.
+require_literal "${portal_login}" 'let { mode } = $props();' \
+    'each sign-in route must inject its fixed portal role into the shared authentication flow'
+require_literal "${portal_login}" 'const formData = new FormData(form);' \
     'login submission must read browser/password-manager autofill from the native form'
-require_literal "${login_page}" 'name="username"' \
+require_literal "${portal_login}" 'async function requestReset(event)' \
+    'password recovery must synchronize browser-filled native form values before validation'
+require_literal "${portal_login}" 'name="username"' \
     'the login identifier must be a form-associated autofill field'
-require_literal "${login_page}" 'name="password"' \
+require_literal "${portal_login}" 'name="password"' \
     'the login password must be a form-associated autofill field'
-require_literal "${login_page}" 'autocomplete="current-password"' \
+require_literal "${portal_login}" 'autocomplete="current-password"' \
     'the login password must advertise the current-password autofill contract'
-require_literal "${login_page}" 'autocomplete="one-time-code"' \
+require_literal "${portal_login}" 'autocomplete="one-time-code"' \
     'the authenticator field must support native one-time-code autofill'
-require_literal "${login_page}" 'name="totp"' \
+require_literal "${portal_login}" 'name="totp"' \
     'the authenticator code must remain form-associated for password-manager autofill'
-require_literal "${login_page}" 'on:keydown={onTotpKey}' \
+require_literal "${portal_login}" 'on:keydown={onTotpKey}' \
     'the authenticator field must retain its explicit Enter-key verification path'
-require_literal "${login_page}" '<Button type="submit" class="w-full" disabled={loading || !mode}>' \
+require_literal "${portal_login}" '<Button type="submit" class="identity-primary-action w-full" disabled={loading}>' \
     'the sign-in action must submit visibly autofilled values instead of depending on stale component state'
-reject_literal "${login_page}" 'on:click={connect}' \
+require_literal "${portal_login}" 'role: mode.toUpperCase()' \
+    'passkey authentication must send the requested fixed portal role'
+require_literal "${portal_login}" 'session?.role !== mode.toUpperCase()' \
+    'a passkey response with the wrong portal role must not be persisted'
+require_literal "${portal_login}" 'role="alert"' \
+    'sign-in failures must render an inline error state as well as optional toast feedback'
+reject_literal "${portal_login}" 'disabled={loading || !username.trim() || recoverySent}' \
+    'password recovery must not become inert when a password manager fills the native form without an input event'
+require_literal "${portal_login}" "passkeyAvailability === 'unsupported'" \
+    'unsupported passkeys must have an explanatory terminal state instead of an inert control'
+reject_literal "${portal_login}" 'on:click={connect}' \
     'the sign-in button must not double-dispatch click and form-submit handlers'
+reject_literal "${portal_login}" 'on:click=' \
+    'Svelte component event directives must not be used for authentication buttons because the shared Button accepts native onclick props'
+reject_literal "${reset_password}" 'on:click=' \
+    'password-reset buttons must use the shared Button native onclick prop'
+require_literal "${portal_login}" 'onclick={loginWithPasskey}' \
+    'the passkey action must reach the native button through the shared Button onclick prop'
+
+bash "${odyssey_contract}"
 
 fixture_dir="$(mktemp -d)"
 trap 'rm -rf "${fixture_dir}"' EXIT

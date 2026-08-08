@@ -45,7 +45,16 @@ data class PortalPasswordResetConfirmRequest(
     val newPassword: String,
 )
 data class PortalWebAuthnRegisterFinishRequest(val challenge: String, val credential: String, val friendlyName: String? = null)
-data class PortalWebAuthnAuthenticateFinishRequest(val challenge: String, val credential: String)
+data class PortalWebAuthnAuthenticateFinishRequest(
+    val challenge: String,
+    val credential: String,
+    /**
+     * Optional portal lane selected by the client. The server derives the
+     * authoritative lane from the authenticated user's role before issuing a
+     * session, so clients that omit this remain compatible.
+     */
+    val role: String? = null
+)
 data class PortalWebAuthnContext(val origin: String, val rpId: String)
 data class PortalPasskeySummary(
     val id: Long,

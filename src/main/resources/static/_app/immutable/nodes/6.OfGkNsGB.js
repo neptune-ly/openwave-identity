@@ -1,0 +1,1 @@
+import"../chunks/VrSHB8Du.js";import"../chunks/CcbT4W3N.js";import"../chunks/Bp6-o963.js";import{t as e}from"../chunks/BbDrl0Tp.js";function t(t){e(t,{mode:`bank`})}export{t as component};

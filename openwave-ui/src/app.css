@@ -2,7 +2,48 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  --ow-odyssey-version: "2.21.1";
+  --ow-odyssey-focus-ring: 0 0 0 3px rgba(59, 193, 238, 0.72);
+  --ow-odyssey-target-min: 48px;
+}
+
 *, *::before, *::after { box-sizing: border-box; }
+
+.ow-theme-root :is(a, button, input, select, textarea):focus-visible {
+  outline: 2px solid #3bc1ee;
+  outline-offset: 3px;
+  box-shadow: var(--ow-odyssey-focus-ring);
+}
+
+.identity-primary-action {
+  min-height: var(--ow-odyssey-target-min);
+}
+
+/* Authentication controls are all touch targets, not only the dominant CTA. */
+.identity-auth-shell :is(button, input, select, textarea) {
+  min-height: var(--ow-odyssey-target-min);
+}
+
+.identity-auth-shell button {
+  min-width: var(--ow-odyssey-target-min);
+}
+
+.identity-auth-shell .identity-primary-action {
+  color: #fff;
+  background-color: #514dcc;
+  font-weight: 700;
+}
+
+.identity-auth-shell .identity-primary-action:hover:not(:disabled) {
+  background-color: #4541b8;
+}
+
+[dir='rtl'] .identity-auth-shell :is(input[type='password'], input[inputmode='numeric'], input[autocomplete='one-time-code']) {
+  direction: ltr;
+  unicode-bidi: plaintext;
+  text-align: left;
+}
 
 html, body {
   margin: 0;
@@ -1156,10 +1197,90 @@ select option {
   max-width: 24rem;
 }
 
+.identity-auth-lanes {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.identity-auth-lane {
+  display: grid;
+  gap: 0.28rem;
+  min-height: var(--ow-odyssey-target-min);
+  padding: 0.9rem 1rem;
+  border: 1px solid rgba(148, 163, 184, 0.44);
+  border-radius: 0.75rem;
+  color: inherit;
+  text-decoration: none;
+  background: rgba(15, 23, 42, 0.26);
+  transition: border-color 160ms ease, background 160ms ease, transform 160ms ease;
+}
+
+.identity-auth-lane:hover {
+  border-color: rgba(59, 193, 238, 0.78);
+  background: rgba(59, 193, 238, 0.1);
+  transform: translateY(-1px);
+}
+
+.identity-auth-lane span {
+  font-weight: 750;
+}
+
+.identity-auth-lane small {
+  color: rgba(241, 245, 249, 0.72);
+  line-height: 1.35;
+}
+
+.identity-auth-lane-link {
+  display: inline-flex;
+  min-height: var(--ow-odyssey-target-min);
+  align-items: center;
+  justify-content: center;
+  color: #7dd3fc;
+  font-size: 0.875rem;
+  font-weight: 700;
+}
+
+.identity-auth-method-note {
+  margin: 0;
+  border-radius: 0.625rem;
+  padding: 0.75rem 0.85rem;
+  color: rgba(241, 245, 249, 0.76);
+  background: rgba(15, 23, 42, 0.38);
+  font-size: 0.8125rem;
+  line-height: 1.45;
+}
+
+.identity-auth-shell[data-theme='light'] .identity-auth-lane {
+  border-color: rgba(15, 23, 42, 0.16);
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.identity-auth-shell[data-theme='light'] .identity-auth-lane:hover {
+  border-color: rgba(7, 49, 95, 0.48);
+  background: rgba(59, 193, 238, 0.08);
+}
+
+.identity-auth-shell[data-theme='light'] .identity-auth-lane small {
+  color: rgba(29, 41, 57, 0.68);
+}
+
+.identity-auth-shell[data-theme='light'] .identity-auth-lane-link {
+  color: #075985;
+}
+
+.identity-auth-shell[data-theme='light'] .identity-auth-method-note {
+  color: rgba(29, 41, 57, 0.76);
+  background: rgba(15, 23, 42, 0.05);
+}
+
 @media (max-width: 767px) {
   .identity-auth-shell {
     align-items: start;
-    padding-top: 2.5rem;
+    padding:
+      max(1rem, env(safe-area-inset-top))
+      max(1rem, env(safe-area-inset-right))
+      max(1.5rem, env(safe-area-inset-bottom))
+      max(1rem, env(safe-area-inset-left));
   }
 
   .identity-auth-card {
