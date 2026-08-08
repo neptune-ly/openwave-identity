@@ -117,6 +117,11 @@ broader sudo access just to create release evidence. The shared lock remains at
 `/opt/openwave/neptune-astro/deploy/hetzner/.openwave-prod-deploy.lock` so old
 and new release scripts serialize against the same inode.
 
+Database proof containers share the live `identity` service's network namespace
+so production-only Docker/DNS names resolve exactly as they do for the app. They
+must never fall back to host networking or reinterpret a service name as
+loopback.
+
 Deploy an immutable reviewed SHA only after those checks:
 
 ```bash
