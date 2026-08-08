@@ -6,6 +6,7 @@
   import { get } from 'svelte/store';
   import { toast } from 'svelte-sonner';
   import axios from 'axios';
+  import { isTimeoutError, PORTAL_REQUEST_TIMEOUT_MS } from '$lib/api/client';
   import { configuredRegistryUrl } from '$lib/config';
   import { theme } from '$lib/stores/theme';
   import { Button } from '$lib/components/ui/button/index.js';
@@ -41,6 +42,7 @@
   let bankApprovalChecking = $state(false);
   let bankApprovalPollError = $state('');
   let bankApprovalTimer = $state(null);
+  const portalHttp = axios.create({ timeout: PORTAL_REQUEST_TIMEOUT_MS });
 
   const portalModes = [
     { value: 'admin', label: 'Registry Admin', hint: 'Directory and system controls' },
@@ -62,6 +64,9 @@
       const requestedRole = new URL(window.location.href).searchParams.get('role');
       if (requestedMode(requestedRole)) {
         mode = requestedRole;
+      }
+      if (new URL(window.location.href).searchParams.get('reason') === 'session-expired') {
+        toast.error('Your portal session expired. Sign in again.');
       }
       passkeySupported = !!window.PublicKeyCredential && window.isSecureContext;
     }
@@ -88,7 +93,7 @@
     loading = true;
     roleMismatch = null;
     try {
-      const r = await axios.post(baseUrl + '/auth/login', {
+      const r = await portalHttp.post(baseUrl + '/auth/login', {
         username: username.trim(),
         password,
         role: mode === 'admin' ? 'ADMIN' : mode === 'customer' ? 'CUSTOMER' : 'BANK'
@@ -133,6 +138,8 @@
         toast.error(`This account belongs to the ${roleLabel(expectedRole)} lane.`);
       } else if (status === 401 || status === 403) {
         toast.error('Invalid credential — access denied');
+      } else if (isTimeoutError(e)) {
+        toast.error('The identity service took too long to respond. Please retry.');
       } else if (!e.response) {
         toast.error('Cannot reach registry endpoint');
       } else {
@@ -151,7 +158,7 @@
     }
     loading = true;
     try {
-      const r = await axios.post(baseUrl + '/auth/login/totp/verify', {
+      const r = await portalHttp.post(baseUrl + '/auth/login/totp/verify', {
         challengeId: totpChallengeId,
         code: totpCode.trim()
       });
@@ -236,7 +243,7 @@
     if (!bankApprovalChallengeId || !bankApprovalStatusToken || bankApprovalChecking) return;
     bankApprovalChecking = true;
     try {
-      const r = await axios.get(baseUrl + `/auth/login/bank-approval/${bankApprovalChallengeId}`, {
+      const r = await portalHttp.get(baseUrl + `/auth/login/bank-approval/${bankApprovalChallengeId}`, {
         headers: {
           'X-OpenWave-Login-Status-Token': bankApprovalStatusToken
         }
@@ -276,7 +283,7 @@
     }
     loading = true;
     try {
-      await axios.post(baseUrl + '/auth/password-reset/request', { usernameOrEmail: username.trim() });
+      await portalHttp.post(baseUrl + '/auth/password-reset/request', { usernameOrEmail: username.trim() });
       recoverySent = true;
       toast.success('If the account has email configured, a secure reset link was sent.');
     } catch (e) {
@@ -293,7 +300,7 @@
     }
     loading = true;
     try {
-      const optionsResponse = await axios.post(baseUrl + '/auth/passkey/options/authenticate', {});
+      const optionsResponse = await portalHttp.post(baseUrl + '/auth/passkey/options/authenticate', {});
       const requestOptions = JSON.parse(optionsResponse.data.options);
       requestOptions.publicKey.challenge = base64UrlToBuffer(requestOptions.publicKey.challenge);
       requestOptions.publicKey.allowCredentials = (requestOptions.publicKey.allowCredentials || []).map((cred) => ({
@@ -318,7 +325,7 @@
           clientExtensionResults: credential.getClientExtensionResults()
         })
       };
-      const r = await axios.post(baseUrl + '/auth/passkey/authenticate', payload);
+      const r = await portalHttp.post(baseUrl + '/auth/passkey/authenticate', payload);
       finishSessionLogin(r.data, 'Connected with passkey');
     } catch (e) {
       toast.error(e.response?.data?.message || e.response?.data?.error || e.message || 'Passkey sign in failed');

@@ -110,6 +110,9 @@ jobs:
           ref: ${{ inputs.ref }}
           persist-credentials: false
 
+      - name: Check production release contract
+        run: bash scripts/check-production-release-contract.sh
+
       - name: Deploy and verify
         env:
           PREFLIGHT_ATTESTATION_KEY: ${{ secrets.OPENWAVE_PROD_PREFLIGHT_ATTESTATION_KEY }}

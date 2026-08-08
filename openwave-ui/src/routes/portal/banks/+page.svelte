@@ -18,6 +18,7 @@
   let session = $state(null);
   let banks = $state([]);
   let loading = $state(false);
+  let loadError = $state('');
   let newBankKey = $state('');
   let search = $state('');
   let readinessFilter = $state('all');
@@ -56,10 +57,19 @@
 
   async function loadBanks() {
     loading = true;
+    loadError = '';
     try {
       const response = isAdmin ? await apiPublic('/banks') : await apiCall('get', '/banks/me');
       if (!response.ok) {
-        toast.error(response.error || 'Could not load bank profile');
+        if (response.status === 401) {
+          auth.logout();
+          await goto('/login?reason=session-expired', { replaceState: true });
+          return;
+        }
+        loadError = response.timedOut
+          ? 'The identity service took too long to load this bank workspace. No changes were made.'
+          : response.error || 'Could not load the bank workspace.';
+        toast.error(loadError);
         banks = [];
         return;
       }
@@ -243,6 +253,15 @@
           {#each Array(4) as _}
             <div class="identity-surface-soft h-20 animate-pulse"></div>
           {/each}
+        </div>
+      {:else if loadError}
+        <div role="alert" class="px-5 py-12 text-center">
+          <p class="text-sm font-medium text-white">{loadError}</p>
+          <p class="mx-auto mt-2 max-w-xl text-sm text-white/45">Retry the read-only load. This workspace will stop cleanly if the registry remains unavailable.</p>
+          <button type="button" onclick={loadBanks} class="identity-shell-button mt-5 inline-flex min-h-12 items-center gap-2 rounded-xl border px-4 py-2 text-[13px] font-medium transition hover:text-white">
+            <RefreshCw class="h-4 w-4" />
+            Retry workspace
+          </button>
         </div>
       {:else if !filteredBanks.length}
         <div class="px-5 py-16 text-center text-sm text-white/40">No banks are registered yet.</div>

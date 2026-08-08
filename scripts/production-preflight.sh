@@ -143,8 +143,13 @@ ow_require_secret_file "${PREFLIGHT_ATTESTATION_KEY_FILE}" "preflight attestatio
     docker exec "${restore_name}" pg_isready -U postgres >/dev/null
     restore_database="identity_restore_ci_${stamp}"
     docker exec "${restore_name}" createdb -U postgres "${restore_database}"
+    # This gate proves that the encrypted dump can recover logical schema and
+    # data into a clean cluster. Production roles and grants are provisioned by
+    # database operations, so the disposable cluster deliberately restores as
+    # its local superuser while still failing on every schema/data restore error.
     openssl enc -d -aes-256-cbc -pbkdf2 -pass "file:${BACKUP_ENCRYPTION_KEY_FILE}" -in "${backup_path}" \
-        | docker exec -i "${restore_name}" pg_restore -U postgres -d "${restore_database}" --clean --if-exists
+        | docker exec -i "${restore_name}" pg_restore -U postgres -d "${restore_database}" \
+            --clean --if-exists --no-owner --no-privileges --exit-on-error
     table_count="$(docker exec "${restore_name}" psql -U postgres -d "${restore_database}" -Atqc "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public'")"
     [[ "${table_count}" =~ ^[1-9][0-9]*$ ]] || ow_fail "isolated PostgreSQL restore has no public tables"
     docker exec "${restore_name}" psql -U postgres -d "${restore_database}" -Atqc "SELECT 1 FROM flyway_schema_history LIMIT 1" >/dev/null

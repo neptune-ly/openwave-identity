@@ -2,7 +2,8 @@
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
-  import { getApi } from '$lib/api/client';
+  import { auth } from '$lib/stores/auth';
+  import { getApi, isTimeoutError } from '$lib/api/client';
   import { toast } from 'svelte-sonner';
   import RefreshCw from 'lucide-svelte/icons/refresh-cw';
   import UserRound from 'lucide-svelte/icons/user-round';
@@ -12,6 +13,7 @@
   import Info from 'lucide-svelte/icons/info';
 
   let loading = $state(true);
+  let loadError = $state('');
   let profile = $state(null);
   let selectedAccount = $state(null);
   let loginApprovals = $state([]);
@@ -77,6 +79,7 @@
 
   async function loadCustomer() {
     loading = true;
+    loadError = '';
     try {
       const api = getApi();
       const [profileResponse, approvalsResponse] = await Promise.all([
@@ -89,7 +92,15 @@
       const accounts = profileResponse.data?.accounts ?? [];
       selectedAccount = syncSelectionFromQuery(accounts) ?? accounts.find((account) => account.default) ?? accounts[0] ?? null;
     } catch (error) {
-      toast.error(error?.response?.data?.message || error?.response?.data?.error || 'Could not load customer accounts');
+      if (error?.response?.status === 401) {
+        auth.logout();
+        await goto('/login?reason=session-expired', { replaceState: true });
+        return;
+      }
+      loadError = isTimeoutError(error)
+        ? 'The identity service took too long to load this workspace. No changes were made.'
+        : error?.response?.data?.message || error?.response?.data?.error || 'Could not load your identity workspace.';
+      toast.error(loadError);
       profile = null;
       selectedAccount = null;
       loginApprovals = [];
@@ -260,9 +271,14 @@
       <div class="h-[32rem] animate-pulse rounded-2xl bg-white/[0.04]"></div>
     </div>
   {:else if !profile}
-    <div class="rounded-2xl border border-dashed border-white/[0.12] bg-white/[0.02] px-5 py-16 text-center text-sm text-white/40">
-      Your customer identity profile is not available yet.
-    </div>
+    <section role="alert" class="identity-surface-card px-5 py-12 text-center">
+      <p class="text-sm font-medium text-white">{loadError || 'Your customer identity profile is not available yet.'}</p>
+      <p class="mx-auto mt-2 max-w-xl text-sm text-white/45">Retry the read-only load. If the service is still unavailable, this page will stop cleanly instead of waiting forever.</p>
+      <button type="button" onclick={loadCustomer} class="identity-shell-button mt-5 inline-flex min-h-12 items-center gap-2 rounded-xl border px-4 py-2 text-[13px] font-medium transition hover:text-white">
+        <RefreshCw class="h-4 w-4" />
+        Retry workspace
+      </button>
+    </section>
   {:else}
     <div class="grid gap-3 md:grid-cols-4">
       <section class="identity-kpi-card px-5 py-4">

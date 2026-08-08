@@ -31,6 +31,8 @@ jobs:
         with:
           ref: ${{ inputs.ref }}
           persist-credentials: false
+      - name: Check production release contract
+        run: bash scripts/check-production-release-contract.sh
       - name: Produce signed restore evidence
         env:
           BACKUP_ENCRYPTION_KEY: ${{ secrets.OPENWAVE_PROD_BACKUP_ENCRYPTION_KEY }}
