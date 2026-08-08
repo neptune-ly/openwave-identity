@@ -1,6 +1,8 @@
 package ly.openwave.identity.security
 
 import ly.openwave.identity.config.RegistryProperties
+import ly.openwave.identity.entity.PortalRole
+import ly.openwave.identity.repository.PortalUserRepository
 import ly.openwave.identity.service.BankService
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
@@ -36,7 +38,8 @@ const val ROLE_CUSTOMER    = "ROLE_CUSTOMER"
 class SecurityConfig(
     private val props: RegistryProperties,
     private val bankService: BankService,
-    private val portalTokenService: PortalTokenService
+    private val portalTokenService: PortalTokenService,
+    private val portalUserRepository: PortalUserRepository
 ) {
 
     @Bean
@@ -137,7 +140,10 @@ class SecurityConfig(
                 // Bank-authenticated
                 it.anyRequest().hasAnyRole("BANK", "ADMIN", "CUSTOMER")
             }
-            .addFilterBefore(ApiKeyFilter(props, bankService, portalTokenService), UsernamePasswordAuthenticationFilter::class.java)
+            .addFilterBefore(
+                ApiKeyFilter(props, bankService, portalTokenService, portalUserRepository),
+                UsernamePasswordAuthenticationFilter::class.java
+            )
 
         return http.build()
     }
@@ -149,7 +155,8 @@ class SecurityConfig(
 class ApiKeyFilter(
     private val props: RegistryProperties,
     private val bankService: BankService,
-    private val portalTokenService: PortalTokenService
+    private val portalTokenService: PortalTokenService,
+    private val portalUserRepository: PortalUserRepository
 ) : OncePerRequestFilter() {
 
     override fun doFilterInternal(req: HttpServletRequest, res: HttpServletResponse, chain: FilterChain) {
@@ -175,10 +182,17 @@ class ApiKeyFilter(
                 }
             }
             portalSession?.role == "CUSTOMER" -> {
-                val auth = UsernamePasswordAuthenticationToken(
-                    portalSession.subject, null, listOf(SimpleGrantedAuthority(ROLE_CUSTOMER))
-                )
-                SecurityContextHolder.getContext().authentication = auth
+                // Customer session subjects are mutable NPT handles. Require a
+                // current, active customer user for every request so a token
+                // issued before a rename (or deactivation) cannot keep using
+                // generic role-gated endpoints such as OAuth consent.
+                val user = portalUserRepository.findByUsername(portalSession.subject)
+                if (user?.active == true && user.role == PortalRole.CUSTOMER) {
+                    val auth = UsernamePasswordAuthenticationToken(
+                        portalSession.subject, null, listOf(SimpleGrantedAuthority(ROLE_CUSTOMER))
+                    )
+                    SecurityContextHolder.getContext().authentication = auth
+                }
             }
             adminKey != null && constantTimeEquals(adminKey, props.adminKey) -> {
                 val auth = UsernamePasswordAuthenticationToken(

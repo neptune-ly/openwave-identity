@@ -14,11 +14,12 @@
 # own `github.token`. No long-lived credential is stored anywhere, and nothing
 # off the box can use it.
 #
-# ## One runner serves both OpenWave services
+# ## One host serves both OpenWave services
 #
 # Identity and Astro are sibling checkouts under /opt/openwave brought up by one
-# compose file. Register the runner at the ORGANISATION level (neptune-ly) and
-# both repos use the same one — one machine, one runner, two services.
+# compose file. Production currently has one repo-scoped runner registration for
+# each private repository on that same host. Both carry the labels below and both
+# deploy scripts take the same host-level lock.
 #
 # ## Why it probes resolution and not just health
 #
@@ -30,7 +31,7 @@
 #
 # ## One-time setup, in two deliberate halves
 #
-#   1. Org Settings -> Actions -> Runners -> New runner, on the OpenWave box,
+#   1. Repository Settings -> Actions -> Runners -> New runner, on the OpenWave box,
 #      labels:  self-hosted, openwave, astro-app
 #      (grant it access to neptune-astro AND openwave-identity)
 #   2. Settings -> Variables -> IDENTITY_PROD_ENABLED = true
@@ -46,17 +47,20 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: 'Branch, tag or SHA to deploy'
+        description: 'Immutable, reviewed 40-character lowercase commit SHA to deploy'
         required: true
-        default: 'main'
+        type: string
       probe_handle:
         description: 'Handle used for the post-deploy resolution probe (a 404 passes, a 5xx fails)'
         required: true
         default: 'deploy-probe-does-not-exist'
 
-# Identity and Astro share a host and a compose project, so their deploys must
-# not interleave — a `docker compose up` from each at once is how a box ends up
-# serving neither. Same concurrency group as the Astro workflow on purpose.
+permissions:
+  contents: read
+
+# Identity and Astro share a host and a compose project. This group serializes
+# Identity runs; GitHub groups are repository-scoped, so the scripts also take
+# the same host-level flock to serialize Identity against Astro.
 concurrency:
   group: openwave-box-deploy
   cancel-in-progress: false
@@ -75,13 +79,17 @@ jobs:
             echo "Identity deploys are blocked until the self-hosted runner is installed and"
             echo "the switch is turned on deliberately:"
             echo ""
-            echo "  1. Org Settings -> Actions -> Runners -> New runner, on the OpenWave box"
+            echo "  1. Repository Settings -> Actions -> Runners -> New runner, on the OpenWave box"
             echo "     labels: self-hosted, openwave, astro-app"
             echo "  2. Settings -> Variables -> IDENTITY_PROD_ENABLED = true"
             echo ""
             echo "NOTE: /opt/openwave/openwave-identity is not yet a git checkout — it was"
             echo "assembled by rsync. The deploy script refuses and prints the conversion"
             echo "steps rather than guessing at a tree nobody has reconciled."
+            exit 1
+          fi
+          if ! [[ "${{ inputs.ref }}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Identity accepts only an immutable 40-character lowercase SHA."
             exit 1
           fi
           echo "Deploy target enabled."
@@ -98,16 +106,28 @@ jobs:
     steps:
       - name: Checkout the deploy script
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Deploy and verify
         env:
+          PREFLIGHT_ATTESTATION_KEY: ${{ secrets.OPENWAVE_PROD_PREFLIGHT_ATTESTATION_KEY }}
           APP_DIR: /opt/openwave/openwave-identity
           COMPOSE_DIR: /opt/openwave/neptune-astro/deploy/hetzner
           COMPOSE_FILE: docker-compose.app.yml
+          PRODUCTION_ENV_FILE: /opt/openwave/neptune-astro/deploy/hetzner/.env
+          EVIDENCE_DIR: /opt/openwave/release-evidence/identity
+          BACKUP_DIR: /opt/openwave/backups/identity
+          IDENTITY_UI_DIR: /opt/openwave/ui/identity
           DEPLOY_REF: ${{ inputs.ref }}
           PROBE_HANDLE: ${{ inputs.probe_handle }}
           # Public origin plus the /v1 context path, not a secret.
           PUBLIC_BASE_URL: ${{ vars.IDENTITY_PUBLIC_BASE_URL || 'https://identity.neptune.ly/v1' }}
+          PUBLIC_UI_URL: ${{ vars.IDENTITY_PUBLIC_UI_URL || 'https://identity.neptune.ly/portal/identity' }}
           DEPLOY_GITHUB_TOKEN: ${{ github.token }}
           GITHUB_TOKEN: ${{ github.token }}
-        run: bash scripts/deploy-prod-self-hosted.sh
+        run: |
+          test -n "$PREFLIGHT_ATTESTATION_KEY" || { echo '::error::OPENWAVE_PROD_PREFLIGHT_ATTESTATION_KEY is unset'; exit 1; }
+          secret_dir="$(mktemp -d)"; chmod 700 "$secret_dir"; trap 'rm -rf "$secret_dir"' EXIT
+          printf '%s\n' "$PREFLIGHT_ATTESTATION_KEY" >"$secret_dir/attestation.key"; chmod 600 "$secret_dir/attestation.key"
+          PREFLIGHT_ATTESTATION_KEY_FILE="$secret_dir/attestation.key" bash scripts/deploy-prod-self-hosted.sh

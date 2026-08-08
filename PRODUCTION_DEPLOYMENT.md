@@ -37,19 +37,50 @@ VITE_OPENWAVE_REGISTRY_URL=https://identity.example.com/v1
 - Fresh migrations do not seed sample bank API keys or localhost bank callback URLs.
 - Existing legacy sample bank credentials are disabled by migration if present.
 
-## Deploying the service (GitHub Actions)
+## Before deploying a handle-lifecycle migration
+
+1. Take an encrypted PostgreSQL backup and verify that it can be restored.
+2. Inspect production `flyway_schema_history`. V18 must be absent. If any V18
+   attempt failed or partially applied, audit and repair that state deliberately
+   before starting the service. Never deploy this corrected V18 over a database
+   that successfully recorded the older, incompatible V18 checksum.
+3. Run the complete Flyway chain against a disposable PostgreSQL database or
+   staging clone using `PostgresMigrationTest`; the database name must contain
+   `test` or `ci`.
+4. Build the portal source with `npm ci`, `npm run check`, and `npm run build` in
+   `openwave-ui`. The static adapter writes the embedded bundle to
+   `src/main/resources/static`; deploy only source and bundle from the same ref.
+5. Confirm the target ref contains the service rule that checks both live and
+   retired handles. Never deploy a rename UI without the retirement enforcement.
+
+V18 is additive: it creates the permanent reservation table and adds rename
+accounting columns. Do not delete retirement rows as rollback cleanup. They are
+payment-address reservations and therefore audit/safety data, not a cache.
+
+## Deploying the service (self-hosted GitHub Actions)
 
 `.github/workflows/deploy-service.yml` — **Deploy Service**, manual
 (`workflow_dispatch`) with a ref to deploy.
 
-Note the other workflow, *Deploy Pages*, publishes DOCUMENTATION only. It
-touches no running service. Before this file existed, shipping the registry
-meant SSH-ing in by hand with no record of who deployed what.
+The workflow has a GitHub-hosted guard job, followed by a job on the production
+box labelled `self-hosted`, `openwave`, and `astro-app`. Enable it deliberately
+with the repository variable `IDENTITY_PROD_ENABLED=true`. The self-hosted runner
+uses the workflow-scoped `github.token`; no long-lived SSH deploy key is stored.
+Identity and Astro currently have separate repo-scoped runner registrations on
+the same host, so the shared host lock—not runner identity—prevents overlap.
 
-What it does: SSH to the app VPS, check out the requested ref in
-`/opt/openwave/openwave-identity`, `docker compose up -d --build identity` from
-the Astro repo's `deploy/hetzner`, wait for the container healthcheck, and then
-probe alias resolution over the public internet.
+Note the other workflow, *Deploy Pages*, publishes documentation only and touches
+no running service.
+
+What it does: on the host, resolve the requested remote ref in
+`/opt/openwave/openwave-identity`, refuse an unreconciled or dirty checkout,
+`docker compose up -d --build identity` from the Astro repo's `deploy/hetzner`,
+wait for the container healthcheck, and probe alias resolution over the public
+internet. After the backend probe passes, it copies the reviewed static bundle
+to the exact host-mounted `/opt/openwave/ui/identity` target, retains the prior
+bundle beside it, and requires the public portal to return HTTP 200. Identity and
+Astro use a shared host-level `flock`; GitHub concurrency groups are repository-
+scoped and are not the cross-repository lock.
 
 **A deploy is not green because the container started.** On 2026-08-01 the alias
 surface returned HTTP 500 for every input for a full day while
@@ -59,18 +90,72 @@ final step calls `/identity/resolve` as an anonymous caller: **200 or 404
 passes** (the registry is reachable, authenticating and routing), **any 5xx
 fails the run**, because that is the exact shape the outage took.
 
-Required repository secrets:
+Required repository variables:
 
-| Secret | Meaning |
+| Variable | Meaning |
 |---|---|
-| `IDENTITY_DEPLOY_HOST` | App VPS hostname or IP |
-| `IDENTITY_DEPLOY_USER` | SSH user that owns `/opt/openwave` and is in the `docker` group |
-| `IDENTITY_DEPLOY_SSH_KEY` | Private key for that user. Deploy-only, no passphrase |
-| `IDENTITY_DEPLOY_KNOWN_HOSTS` | Host key line. Optional but strongly preferred — without it the run falls back to trust-on-first-use and cannot detect a substituted host |
-| `IDENTITY_PUBLIC_BASE_URL` | Public origin **plus `/v1`**, e.g. `https://identity.example.com/v1` |
+| `IDENTITY_PROD_ENABLED` | Must be exactly `true` after the self-hosted runner and checkout are ready |
+| `IDENTITY_PUBLIC_BASE_URL` | Public origin **plus `/v1`**, e.g. `https://identity.example.com/v1`; defaults to the production Identity URL |
+| `IDENTITY_PUBLIC_UI_URL` | Public portal route used after the host static sync; defaults to `https://identity.neptune.ly/portal/identity` |
 
-The workflow holds no database credentials; those stay in the VPS `.env` as
-before. Give the deploy key its own account rather than reusing an operator's.
+Deploys accept no human safety attestation. Run **Production Preflight** first
+for the exact immutable SHA. On the production runner it creates an encrypted
+streaming PostgreSQL backup, restores it into an isolated disposable PostgreSQL
+container, checks the target checkout/Caddy/compose environment, and signs
+short-lived SHA-bound evidence. The deploy verifies that signature and repeats
+the V18 live-state assertion while holding the shared persistent compose lock.
+The first V18 release requires no V18 history row and no `retired_handles`
+object; later releases require the signed receipt written only after the first
+successful public deploy.
+
+Deploy an immutable reviewed SHA only after those checks:
+
+```bash
+gh workflow run production-preflight.yml \
+  --repo neptune-ly/openwave-identity \
+  --ref <release-branch> \
+  -f ref=<immutable-40-character-release-sha>
+
+gh workflow run deploy-service.yml \
+  --repo neptune-ly/openwave-identity \
+  --ref <release-branch> \
+  -f ref=<the-same-immutable-40-character-release-sha> \
+  -f probe_handle=deploy-probe-does-not-exist
+```
+
+Configure these repository secrets in both `openwave-identity` and
+`neptune-astro`: `OPENWAVE_PROD_BACKUP_ENCRYPTION_KEY` and
+`OPENWAVE_PROD_PREFLIGHT_ATTESTATION_KEY`. They must be distinct, one-line
+32+-character values and must not equal any app/database credential. The backup
+key is used only by preflight; the attestation key is also used by deploy to
+verify evidence and write a V18 success receipt. Database credentials remain in
+the mode-600 VPS `.env`. The host checkout must already be reconciled as a real
+Git checkout; the deploy script refuses to convert the legacy rsync tree.
+
+## Post-deploy lifecycle checks
+
+- The automated probe uses a deliberately unknown alias. `200` or `404` proves
+  the public resolution surface is answering; any 5xx or unexpected status fails.
+- Verify authenticated availability against a known free test candidate and
+  confirm it returns a typed status. A network failure is not `AVAILABLE`.
+- On staging, verify a retired fixture returns `410 HANDLE_RETIRED` and does not
+  reveal or redirect to a successor. Do not create a throwaway production rename
+  merely as a smoke test: every successful rename reserves a string forever.
+- Verify a bank approval that has expired returns 410, a repeated action returns
+  409, invalid filters return 400, an unrelated bank sees 404, and a bad customer
+  reference returns 403.
+- After a real rename, verify the old customer portal session is rejected and
+  OAuth introspection reports old-subject tokens inactive. The rename transaction
+  revokes those tokens and grants; the customer signs in with the new handle and
+  re-authorizes delegated apps.
+
+## Rollback boundary
+
+Before the first successful production rename, the application can be rolled back
+while leaving V18's empty additive structures in place. After any handle has been
+retired, **do not roll back to an application version that ignores
+`retired_handles`**: it could re-issue a former payment address. Disable claim and
+rename traffic and deploy a forward fix instead. Never drop or truncate the table.
 
 ## Operational rule
 

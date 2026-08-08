@@ -343,7 +343,7 @@ class PortalBankLoginChallengeEntity(
         status == BankLoginChallengeStatus.PENDING && now.isBefore(expiresAt)
 
     fun effectiveStatus(now: Instant = Instant.now()): String =
-        if (status == BankLoginChallengeStatus.PENDING && now.isAfter(expiresAt)) "EXPIRED" else status.name
+        if (status == BankLoginChallengeStatus.PENDING && !now.isBefore(expiresAt)) "EXPIRED" else status.name
 
     fun matchesStatusToken(token: String?): Boolean {
         if (token.isNullOrBlank()) return false

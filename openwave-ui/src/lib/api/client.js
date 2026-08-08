@@ -20,7 +20,13 @@ export async function apiCall(method, path, data) {
     return { ok: true, data: r.data };
   } catch (e) {
     const msg = e.response?.data?.message || e.response?.data?.error || e.message;
-    return { ok: false, error: msg, status: e.response?.status };
+    return {
+      ok: false,
+      error: msg,
+      status: e.response?.status,
+      code: e.response?.data?.code,
+      data: e.response?.data
+    };
   }
 }
 

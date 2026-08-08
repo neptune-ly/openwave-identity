@@ -28,31 +28,39 @@
 -- by paying the old one.
 
 CREATE TABLE retired_handles (
-    id                  BIGINT AUTO_INCREMENT PRIMARY KEY,
+    id                  BIGSERIAL    PRIMARY KEY,
 
     -- The reserved string. UNIQUE because retiring the same handle twice is a
     -- bug, and because this column IS the reservation.
     handle              VARCHAR(32)  NOT NULL UNIQUE,
 
     -- Who it used to belong to. Kept so an operator can answer "where did this
-    -- name go" without reading application logs, and so a customer who renamed
-    -- by mistake can be given their old name back deliberately (delete the row,
-    -- rename them back) rather than by a race with whoever claims it first.
+    -- name go" without reading application logs. Deliberately not a foreign key:
+    -- retirement must survive deletion or archival of the former identity.
     former_identity_id  BIGINT       NOT NULL,
 
-    -- What it became. Nullable because a handle can also be retired by an
-    -- identity being deleted, where there is no successor.
+    -- What it became. Current renames populate it for protected audit review,
+    -- but it remains nullable for a governed retirement with no published
+    -- successor. Runtime resolution never returns this field.
     replaced_by_handle  VARCHAR(32)  NULL,
 
-    -- Which bank performed the rename, for audit. A rename is a privileged act
-    -- and the caller is a bank, not the customer.
+    -- Which bank authenticated the customer-directed rename, for audit. This is
+    -- deliberately retained as a value rather than a foreign key so the audit
+    -- record survives a later bank archival or handle change.
     performed_by_bank   VARCHAR(20)  NULL,
 
-    retired_at          TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    retired_at          TIMESTAMPTZ  NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
-    INDEX idx_retired_handles_former_identity (former_identity_id),
-    INDEX idx_retired_handles_retired_at (retired_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    -- Only canonical NPT strings may become permanent reservations. This is a
+    -- database backstop; the service performs the same validation first.
+    CONSTRAINT chk_retired_handle_canonical
+        CHECK (handle = LOWER(BTRIM(handle)) AND handle ~ '^[a-z0-9_.-]{3,32}$')
+);
+
+CREATE INDEX idx_retired_handles_former_identity
+    ON retired_handles (former_identity_id);
+CREATE INDEX idx_retired_handles_retired_at
+    ON retired_handles (retired_at);
 
 -- Rename accounting on the identity itself.
 --
@@ -61,8 +69,8 @@ CREATE TABLE retired_handles (
 -- handle squatting paid for by the registry, and a way to probe which names are
 -- free by watching which renames succeed.
 ALTER TABLE npt_identities
-    ADD COLUMN handle_renamed_at TIMESTAMP NULL AFTER updated_at,
-    ADD COLUMN handle_rename_count INT NOT NULL DEFAULT 0 AFTER handle_renamed_at;
+    ADD COLUMN IF NOT EXISTS handle_renamed_at TIMESTAMPTZ NULL,
+    ADD COLUMN IF NOT EXISTS handle_rename_count INTEGER NOT NULL DEFAULT 0;
 
 -- Existing handles are NOT retired by this migration.
 --

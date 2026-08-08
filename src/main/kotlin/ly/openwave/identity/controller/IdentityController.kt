@@ -65,13 +65,20 @@ class IdentityController(
         @PathVariable nptHandle: String,
         @Valid @RequestBody req: RenameHandleRequest
     ): IdentityResponse {
+        val previousHandle = nptHandle.trim().lowercase()
         val identity = identityService.renameHandle(
             currentHandle = nptHandle,
             newHandle = req.newHandle,
             bankHandle = callerBankHandle(),
             nationalId = req.nationalId
         )
-        return identity.toResponse(null)
+        val changed = identity.nptHandle != previousHandle
+        return identity.toResponse(null).copy(
+            retiredHandle = previousHandle.takeIf { changed },
+            reauthenticationRequired = true.takeIf { changed },
+            nextStep = "Customer must sign in again with '${identity.nptHandle}' and re-authorize delegated apps."
+                .takeIf { changed }
+        )
     }
 
     /**
@@ -342,7 +349,13 @@ data class IdentityResponse(
     val nationalIdPresent: Boolean,
     val customerPortalAccess: CustomerPortalAccessResponse?,
     val createdAt: Instant,
-    val updatedAt: Instant
+    val updatedAt: Instant,
+    @get:com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+    val retiredHandle: String? = null,
+    @get:com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+    val reauthenticationRequired: Boolean? = null,
+    @get:com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+    val nextStep: String? = null
 )
 
 data class CustomerPortalAccessResponse(

@@ -11,17 +11,18 @@
 
   let loading = $state(true);
   let approval = $state(null);
+  let loadError = $state('');
   const challengeId = $derived(appPage.params.challengeId);
 
   onMount(loadApproval);
 
   async function loadApproval() {
     loading = true;
+    loadError = '';
     try {
       const response = await apiCall('get', `/customer/login-approvals/${challengeId}`);
       if (!response.ok) {
-        toast.error(response.error || 'Could not load sign-in record');
-        await goto('/portal/customer/login-approvals');
+        loadError = response.error || 'Could not load sign-in record.';
         return;
       }
       approval = response.data;
@@ -72,18 +73,18 @@
 
 <svelte:head><title>Customer Sign-in Record - OpenWave Identity</title></svelte:head>
 
-<div class="p-8 max-w-5xl mx-auto space-y-6">
+<div class="mx-auto max-w-5xl space-y-6 p-4 sm:p-8">
   <div class="flex flex-wrap items-center justify-between gap-3">
-    <a href={backHref()} class="identity-shell-button inline-flex items-center gap-2 rounded-xl border px-4 py-2 text-[13px] font-medium transition-all hover:text-white">
+    <a href={backHref()} class="identity-shell-button inline-flex min-h-12 items-center gap-2 rounded-xl border px-4 text-[13px] font-medium transition-all hover:text-white">
       <ArrowLeft class="h-4 w-4" />
       Back to sign-in history
     </a>
     <div class="flex flex-wrap gap-2">
-      <button onclick={loadApproval} disabled={loading} class="identity-shell-button inline-flex items-center gap-2 rounded-xl border px-4 py-2 text-[13px] font-medium transition-all hover:text-white disabled:opacity-40">
+      <button onclick={loadApproval} disabled={loading} class="identity-shell-button inline-flex min-h-12 items-center gap-2 rounded-xl border px-4 text-[13px] font-medium transition-all hover:text-white disabled:opacity-40">
         <RefreshCw class={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
         Refresh
       </button>
-      <button onclick={copySummary} disabled={loading || !approval} class="inline-flex items-center gap-2 rounded-xl border border-white/[0.1] px-4 py-2 text-[13px] font-medium text-white/70 transition-all hover:border-white/[0.18] hover:text-white disabled:opacity-40">
+      <button onclick={copySummary} disabled={loading || !approval} class="inline-flex min-h-12 items-center gap-2 rounded-xl border border-white/[0.1] px-4 text-[13px] font-medium text-white/70 transition-all hover:border-white/[0.18] hover:text-white disabled:opacity-40">
         <Copy class="h-4 w-4" />
         Copy summary
       </button>
@@ -91,7 +92,13 @@
   </div>
 
   {#if loading}
-    <section class="identity-surface-card p-8 text-center text-sm text-white/40">Loading sign-in record...</section>
+    <section class="identity-surface-card p-8 text-center text-sm text-white/40" role="status" aria-live="polite" aria-busy="true">Loading sign-in record...</section>
+  {:else if loadError}
+    <section class="identity-surface-card p-6" role="alert">
+      <h1 class="text-lg font-semibold text-white">Sign-in record unavailable</h1>
+      <p class="mt-2 text-sm text-white/55">{loadError}</p>
+      <button type="button" onclick={loadApproval} class="identity-shell-button mt-4 min-h-12 rounded-xl border px-4 text-[13px] font-semibold">Retry</button>
+    </section>
   {:else if approval}
     <section class="identity-expressive-band p-6">
       <div class="max-w-3xl">
@@ -102,7 +109,7 @@
           <span class="identity-role-accent">
             Owner-visible trust trail
             <span class="tooltip max-w-xs" data-tip="Customers can inspect their own sign-in outcomes and linked-bank approval context here. This is intentionally more complete than support-safe operator queues.">
-              <Info class={hintClass()} />
+              <Info class={hintClass()} aria-hidden="true" />
             </span>
           </span>
         </div>

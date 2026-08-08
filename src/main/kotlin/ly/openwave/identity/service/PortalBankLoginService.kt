@@ -6,6 +6,10 @@ import ly.openwave.identity.entity.IdentityEntity
 import ly.openwave.identity.entity.PortalBankLoginChallengeEntity
 import ly.openwave.identity.entity.PortalRole
 import ly.openwave.identity.entity.PortalUserEntity
+import ly.openwave.identity.exception.LoginApprovalInvalidFilterException
+import ly.openwave.identity.exception.LoginApprovalNotFoundException
+import ly.openwave.identity.exception.LoginApprovalNotPermittedException
+import ly.openwave.identity.exception.LoginApprovalTerminalException
 import ly.openwave.identity.repository.LinkedAccountRepository
 import ly.openwave.identity.repository.PortalBankLoginChallengeRepository
 import ly.openwave.identity.security.PortalTokenService
@@ -137,7 +141,7 @@ class PortalBankLoginService(
     @Transactional(readOnly = true)
     fun getStatus(challengeId: String, statusToken: String?): PortalBankLoginChallengeStatusResult {
         val challenge = challengeRepository.findById(challengeId)
-            .orElseThrow { IllegalArgumentException("Bank login challenge was not found.") }
+            .orElseThrow { LoginApprovalNotFoundException("Bank login challenge was not found.") }
         if (!challenge.matchesStatusToken(statusToken)) {
             throw ResponseStatusException(HttpStatus.FORBIDDEN, "Login approval status token is invalid.")
         }
@@ -148,14 +152,21 @@ class PortalBankLoginService(
         val now = Instant.now()
         val effectiveStatus = challenge.effectiveStatus(now)
         val expiresIn = (challenge.expiresAt.epochSecond - now.epochSecond).coerceAtLeast(0)
-        val sessionPayload = if (effectiveStatus == "APPROVED" && !challenge.portalSessionToken.isNullOrBlank()) {
+        val sessionExpiresIn = challenge.portalSessionExpiresAt
+            ?.let { (it.epochSecond - now.epochSecond).coerceAtLeast(0) }
+            ?: 0
+        val sessionPayload = if (
+            effectiveStatus == "APPROVED" &&
+            !challenge.portalSessionToken.isNullOrBlank() &&
+            sessionExpiresIn > 0
+        ) {
             mapOf(
                 "role" to "CUSTOMER",
                 "username" to challenge.user.username,
                 "bankHandle" to null,
                 "portalRole" to challenge.user.role.name,
                 "sessionToken" to challenge.portalSessionToken,
-                "expiresIn" to sessionTtlSeconds
+                "expiresIn" to sessionExpiresIn
             )
         } else {
             null
@@ -181,22 +192,28 @@ class PortalBankLoginService(
     @Transactional(readOnly = true)
     fun getForBank(bankHandle: String, challengeId: String): Map<String, Any?> {
         val challenge = challengeRepository.findForBankByChallengeId(challengeId, bankHandle)
-            .orElseThrow { IllegalArgumentException("Bank login challenge was not found for this bank.") }
+            .orElseThrow { LoginApprovalNotFoundException("Bank login challenge was not found for this bank.") }
         return queueItemMap(toQueueItem(challenge, bankHandle))
     }
 
     @Transactional(readOnly = true)
     fun listForBank(bankHandle: String, status: String?, search: String?, limit: Int): Map<String, Any?> {
-        val normalizedStatus = status?.trim()?.uppercase()?.takeIf(String::isNotBlank)?.let {
-            runCatching { BankLoginChallengeStatus.valueOf(it) }.getOrElse {
-                throw IllegalArgumentException("Unsupported bank login approval status '$status'")
+        val normalizedStatus = status?.trim()?.uppercase()?.takeIf(String::isNotBlank)?.also {
+            if (it !in setOf("PENDING", "APPROVED", "REJECTED", "EXPIRED")) {
+                throw LoginApprovalInvalidFilterException(status)
             }
         }
-        val rows = challengeRepository.findForBank(
+        val repositoryStatus = normalizedStatus
+            ?.takeUnless { it == "EXPIRED" }
+            ?.let(BankLoginChallengeStatus::valueOf)
+        val fetchedRows = challengeRepository.findForBank(
             bankHandle = bankHandle,
-            status = normalizedStatus,
+            status = repositoryStatus,
             needle = search?.trim()?.lowercase()?.takeIf(String::isNotBlank)
         )
+        val rows = normalizedStatus
+            ?.let { expected -> fetchedRows.filter { it.effectiveStatus() == expected } }
+            ?: fetchedRows
         val capped = rows.take(limit.coerceIn(1, 100))
         val items = capped.map { toQueueItem(it, bankHandle) }
         return mapOf(
@@ -214,17 +231,33 @@ class PortalBankLoginService(
 
     @Transactional(readOnly = true)
     fun listForCustomer(identity: IdentityEntity, limit: Int, status: String?): Map<String, Any?> {
-        val normalizedStatus = status?.trim()?.uppercase()?.takeIf(String::isNotBlank)?.let {
-            runCatching { BankLoginChallengeStatus.valueOf(it) }.getOrElse {
-                throw IllegalArgumentException("Unsupported login approval status '$status'")
+        val normalizedStatus = status?.trim()?.uppercase()?.takeIf(String::isNotBlank)?.also {
+            if (it !in setOf("PENDING", "APPROVED", "REJECTED", "EXPIRED")) {
+                throw LoginApprovalInvalidFilterException(status)
             }
         }
         val cappedLimit = limit.coerceIn(1, 25)
-        val page = challengeRepository.findForIdentity(
-            identityId = identity.id,
-            status = normalizedStatus,
-            pageable = PageRequest.of(0, cappedLimit)
-        )
+        val pageable = PageRequest.of(0, cappedLimit)
+        val now = Instant.now()
+        val page = when (normalizedStatus) {
+            "PENDING" -> challengeRepository.findActivePendingForIdentity(
+                identityId = identity.id,
+                pendingStatus = BankLoginChallengeStatus.PENDING,
+                now = now,
+                pageable = pageable
+            )
+            "EXPIRED" -> challengeRepository.findExpiredForIdentity(
+                identityId = identity.id,
+                pendingStatus = BankLoginChallengeStatus.PENDING,
+                now = now,
+                pageable = pageable
+            )
+            else -> challengeRepository.findForIdentity(
+                identityId = identity.id,
+                status = normalizedStatus?.let(BankLoginChallengeStatus::valueOf),
+                pageable = pageable
+            )
+        }
         val items = page.content.map { challenge ->
             PortalCustomerLoginApprovalItem(
                 challengeId = challenge.id,
@@ -266,7 +299,7 @@ class PortalBankLoginService(
     @Transactional(readOnly = true)
     fun getForCustomer(identity: IdentityEntity, challengeId: String): Map<String, Any?> {
         val challenge = challengeRepository.findForIdentityByChallengeId(challengeId, identity.id)
-            .orElseThrow { IllegalArgumentException("Login approval was not found for this customer identity.") }
+            .orElseThrow { LoginApprovalNotFoundException("Login approval was not found for this customer identity.") }
         val item = PortalCustomerLoginApprovalItem(
             challengeId = challenge.id,
             status = challenge.effectiveStatus(),
@@ -296,16 +329,20 @@ class PortalBankLoginService(
     @Transactional
     fun approve(challengeId: String, bankHandle: String, bankCustomerRef: String): PortalBankLoginChallengeStatusResult {
         val challenge = challengeRepository.findById(challengeId)
-            .orElseThrow { IllegalArgumentException("Bank login challenge was not found.") }
+            .orElseThrow { LoginApprovalNotFoundException("Bank login challenge was not found.") }
         if (!challenge.isPending()) {
-            return buildStatusResult(challenge)
+            throw LoginApprovalTerminalException(challenge.effectiveStatus())
         }
         val allowed = linkedAccountRepository.existsByIdentityIdAndBankHandleAndBankCustomerRef(
             challenge.identity.id,
             bankHandle,
             bankCustomerRef
         )
-        require(allowed) { "This bank customer cannot approve the requested OpenWave Identity login." }
+        if (!allowed) {
+            throw LoginApprovalNotPermittedException(
+                "This bank customer cannot approve the requested OpenWave Identity login."
+            )
+        }
 
         val sessionToken = portalTokenService.issue(
             challenge.user.username,
@@ -326,16 +363,20 @@ class PortalBankLoginService(
     @Transactional
     fun reject(challengeId: String, bankHandle: String, bankCustomerRef: String): PortalBankLoginChallengeStatusResult {
         val challenge = challengeRepository.findById(challengeId)
-            .orElseThrow { IllegalArgumentException("Bank login challenge was not found.") }
+            .orElseThrow { LoginApprovalNotFoundException("Bank login challenge was not found.") }
         if (!challenge.isPending()) {
-            return buildStatusResult(challenge)
+            throw LoginApprovalTerminalException(challenge.effectiveStatus())
         }
         val allowed = linkedAccountRepository.existsByIdentityIdAndBankHandleAndBankCustomerRef(
             challenge.identity.id,
             bankHandle,
             bankCustomerRef
         )
-        require(allowed) { "This bank customer cannot reject the requested OpenWave Identity login." }
+        if (!allowed) {
+            throw LoginApprovalNotPermittedException(
+                "This bank customer cannot reject the requested OpenWave Identity login."
+            )
+        }
 
         challenge.status = BankLoginChallengeStatus.REJECTED
         challenge.approvedBankHandle = bankHandle

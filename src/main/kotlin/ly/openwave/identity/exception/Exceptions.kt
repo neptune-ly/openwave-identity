@@ -42,6 +42,30 @@ class HandleRenameTooSoonException(msg: String) :
 class HandleInvalidFormatException(handle: String) :
     RegistryException("HANDLE_INVALID_FORMAT", "Handle '$handle' is invalid. Use 3-32 lowercase alphanumeric characters, dots, underscores, or hyphens.", HttpStatus.UNPROCESSABLE_ENTITY)
 
+class LoginApprovalNotFoundException(message: String = "Login approval was not found.") :
+    RegistryException("LOGIN_APPROVAL_NOT_FOUND", message, HttpStatus.NOT_FOUND)
+
+class LoginApprovalInvalidFilterException(status: String) :
+    RegistryException(
+        "LOGIN_APPROVAL_INVALID_FILTER",
+        "Unsupported login approval status '$status'. Use PENDING, APPROVED, REJECTED, or EXPIRED.",
+        HttpStatus.BAD_REQUEST
+    )
+
+class LoginApprovalNotPermittedException(message: String) :
+    RegistryException("LOGIN_APPROVAL_NOT_PERMITTED", message, HttpStatus.FORBIDDEN)
+
+class LoginApprovalTerminalException(status: String) :
+    RegistryException(
+        if (status == "EXPIRED") "LOGIN_APPROVAL_EXPIRED" else "LOGIN_APPROVAL_ALREADY_ACTIONED",
+        if (status == "EXPIRED") {
+            "This login approval expired before the bank action was completed. Start a new sign-in request."
+        } else {
+            "This login approval is already ${status.lowercase()} and cannot be actioned again."
+        },
+        if (status == "EXPIRED") HttpStatus.GONE else HttpStatus.CONFLICT
+    )
+
 class AccountAlreadyLinkedException(bankHandle: String) :
     RegistryException("ACCOUNT_ALREADY_LINKED", "A '$bankHandle' account is already linked to this identity", HttpStatus.CONFLICT)
 

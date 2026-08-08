@@ -5,16 +5,23 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import ly.openwave.identity.entity.IdentityEntity
 import ly.openwave.identity.entity.BankLoginChallengeStatus
 import ly.openwave.identity.entity.LinkedAccountEntity
+import ly.openwave.identity.entity.OAuthEnvironment
+import ly.openwave.identity.entity.OAuthOwnerType
+import ly.openwave.identity.entity.OAuthTokenEntity
+import ly.openwave.identity.entity.OAuthUserGrantEntity
 import ly.openwave.identity.entity.PortalRole
 import ly.openwave.identity.entity.PortalBankLoginChallengeEntity
 import ly.openwave.identity.entity.PortalUserEntity
 import ly.openwave.identity.repository.BankRepository
 import ly.openwave.identity.repository.IdentityRepository
 import ly.openwave.identity.repository.LinkedAccountRepository
+import ly.openwave.identity.repository.OAuthTokenRepository
+import ly.openwave.identity.repository.OAuthUserGrantRepository
 import ly.openwave.identity.repository.PortalBankLoginChallengeRepository
 import ly.openwave.identity.repository.PortalLoginChallengeRepository
 import ly.openwave.identity.repository.PortalEmailOtpRepository
 import ly.openwave.identity.repository.PortalUserRepository
+import ly.openwave.identity.repository.RetiredHandleRepository
 import ly.openwave.identity.security.PortalTokenService
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.BeforeEach
@@ -65,17 +72,23 @@ class IdentityLaunchHardeningTests {
     @Autowired lateinit var portalBankLoginChallengeRepo: PortalBankLoginChallengeRepository
     @Autowired lateinit var portalUserRepo: PortalUserRepository
     @Autowired lateinit var portalEmailOtpRepo: PortalEmailOtpRepository
+    @Autowired lateinit var retiredHandleRepo: RetiredHandleRepository
+    @Autowired lateinit var oauthTokenRepo: OAuthTokenRepository
+    @Autowired lateinit var oauthUserGrantRepo: OAuthUserGrantRepository
     @Autowired lateinit var portalTokenService: PortalTokenService
     @Autowired lateinit var portalAuditService: PortalAuditService
     @MockBean lateinit var credentialNotificationService: PortalCredentialNotificationService
 
     @BeforeEach
     fun resetData() {
+        oauthTokenRepo.deleteAll()
+        oauthUserGrantRepo.deleteAll()
         portalBankLoginChallengeRepo.deleteAll()
         portalLoginChallengeRepo.deleteAll()
         portalEmailOtpRepo.deleteAll()
         portalUserRepo.deleteAll()
         linkedAccountRepo.deleteAll()
+        retiredHandleRepo.deleteAll()
         identityRepo.deleteAll()
         bankRepo.deleteAll()
     }
@@ -127,6 +140,161 @@ class IdentityLaunchHardeningTests {
         assertThat(identity.nptHandle).isEqualTo("stable-user")
         assertThat(identity.displayName).isEqualTo("Stable Customer")
         assertThat(identityRepo.findByNptHandle("renamed-user")).isNull()
+    }
+
+    @Test
+    fun `bank authenticated customer rename retires the old handle without redirecting it`() {
+        val bank = registerBank("rename-bank")
+        val nationalId = "100000000021"
+        claim(
+            bank,
+            "rename-before",
+            "LY33333333333333333335",
+            nationalId = nationalId,
+            customerEmail = "rename-customer@example.test"
+        )
+
+        // Both credential types are username-subject credentials. They must
+        // not survive under a handle that this operation permanently retires.
+        val oldPortalSession = portalTokenService.issue(
+            "rename-before",
+            "CUSTOMER",
+            null,
+            PortalRole.CUSTOMER.name
+        )
+        val oauthGrant = oauthUserGrantRepo.save(
+            OAuthUserGrantEntity(
+                subject = "rename-before",
+                clientId = "rename-test-client",
+                scopes = "identity:customer.read",
+                ownerType = OAuthOwnerType.CUSTOMER,
+                approvedBy = "rename-before"
+            )
+        )
+        val oauthToken = oauthTokenRepo.save(
+            OAuthTokenEntity(
+                tokenHash = "rename-test-token-hash",
+                refreshTokenHash = "rename-test-refresh-hash",
+                clientId = "rename-test-client",
+                subject = "rename-before",
+                subjectRole = "CUSTOMER",
+                audience = "astro",
+                scopes = "identity:customer.read",
+                ownerType = OAuthOwnerType.CUSTOMER,
+                environment = OAuthEnvironment.SANDBOX,
+                grantType = "authorization_code",
+                grantId = oauthGrant.id,
+                expiresAt = Instant.now().plusSeconds(3600),
+                refreshExpiresAt = Instant.now().plusSeconds(7200)
+            )
+        )
+
+        mockMvc.perform(
+            get("/customer/oauth/grants")
+                .header("X-OpenWave-Portal-Session", oldPortalSession)
+        ).andExpect(status().isOk)
+
+        mockMvc.perform(get("/identity/handles/rename-after/availability"))
+            .andExpect(status().isForbidden)
+
+        mockMvc.perform(
+            get("/identity/handles/rename-after/availability").bankKey(bank.apiKey)
+        ).andExpect(status().isOk)
+            .andExpect(jsonPath("$.handle").value("rename-after"))
+            .andExpect(jsonPath("$.status").value("AVAILABLE"))
+            .andExpect(jsonPath("$.available").value(true))
+
+        mockMvc.perform(
+            patch("/identity/rename-before/handle")
+                .bankKey(bank.apiKey)
+                .jsonBody(
+                    mapOf(
+                        "newHandle" to "rename-after",
+                        "nationalId" to nationalId
+                    )
+                )
+        ).andExpect(status().isOk)
+            .andExpect(jsonPath("$.nptHandle").value("rename-after"))
+            .andExpect(jsonPath("$.retiredHandle").value("rename-before"))
+            .andExpect(jsonPath("$.reauthenticationRequired").value(true))
+            .andExpect(jsonPath("$.nextStep").value(org.hamcrest.Matchers.containsString("sign in again")))
+
+        assertThat(identityRepo.findByNptHandle("rename-before")).isNull()
+        assertThat(identityRepo.findByNptHandle("rename-after")).isNotNull()
+        assertThat(retiredHandleRepo.findByHandle("rename-before")?.replacedByHandle)
+            .isEqualTo("rename-after")
+        assertThat(portalUserRepo.findByUsername("rename-before")).isNull()
+        assertThat(portalUserRepo.findByUsername("rename-after")).isNotNull()
+        assertThat(oauthTokenRepo.findById(oauthToken.id).orElseThrow().revokedAt).isNotNull()
+        assertThat(oauthTokenRepo.findById(oauthToken.id).orElseThrow().revokeReason)
+            .isEqualTo("identity_handle_renamed")
+        assertThat(oauthUserGrantRepo.findById(oauthGrant.id).orElseThrow().active).isFalse()
+        assertThat(oauthUserGrantRepo.findById(oauthGrant.id).orElseThrow().revokedAt).isNotNull()
+
+        // The old signed portal token is structurally valid but its subject no
+        // longer names an active customer user, so even generic customer/OAuth
+        // routes reject it. A fresh token for the new handle works.
+        mockMvc.perform(
+            get("/customer/oauth/grants")
+                .header("X-OpenWave-Portal-Session", oldPortalSession)
+        ).andExpect(status().isForbidden)
+
+        val newPortalSession = portalTokenService.issue(
+            "rename-after",
+            "CUSTOMER",
+            null,
+            PortalRole.CUSTOMER.name
+        )
+        mockMvc.perform(
+            get("/customer/oauth/grants")
+                .header("X-OpenWave-Portal-Session", newPortalSession)
+        ).andExpect(status().isOk)
+
+        mockMvc.perform(
+            get("/identity/handles/rename-before/availability").bankKey(bank.apiKey)
+        ).andExpect(status().isOk)
+            .andExpect(jsonPath("$.status").value("RETIRED"))
+            .andExpect(jsonPath("$.available").value(false))
+
+        mockMvc.perform(
+            get("/identity/resolve").param("alias", "rename-before")
+        ).andExpect(status().isGone)
+            .andExpect(jsonPath("$.code").value("HANDLE_RETIRED"))
+            .andExpect(jsonPath("$.message").value("The name 'rename-before' is no longer in use."))
+
+        mockMvc.perform(
+            get("/identity/resolve").param("alias", "rename-after")
+        ).andExpect(status().isOk)
+            .andExpect(jsonPath("$.nptHandle").value("rename-after"))
+    }
+
+    @Test
+    fun `bank without a linked customer account cannot rename or retire the handle`() {
+        val servingBank = registerBank("serving-bank")
+        val otherBank = registerBank("other-bank")
+        val nationalId = "100000000022"
+        claim(
+            servingBank,
+            "scope-before",
+            "LY33333333333333333336",
+            nationalId = nationalId
+        )
+
+        mockMvc.perform(
+            patch("/identity/scope-before/handle")
+                .bankKey(otherBank.apiKey)
+                .jsonBody(
+                    mapOf(
+                        "newHandle" to "scope-after",
+                        "nationalId" to nationalId
+                    )
+                )
+        ).andExpect(status().isForbidden)
+            .andExpect(jsonPath("$.code").value("HANDLE_RENAME_NOT_PERMITTED"))
+
+        assertThat(identityRepo.findByNptHandle("scope-before")).isNotNull()
+        assertThat(identityRepo.findByNptHandle("scope-after")).isNull()
+        assertThat(retiredHandleRepo.findByHandle("scope-before")).isNull()
     }
 
     @Test
@@ -365,6 +533,7 @@ class IdentityLaunchHardeningTests {
     fun `bank portal login approvals list stays scoped to the current bank`() {
         val bankA = registerBank("approval-a")
         val bankB = registerBank("approval-b")
+        val unrelatedBank = registerBank("approval-other")
         val customerRef = "cust-approval-a"
         mockMvc.perform(
             post("/identity/claim")
@@ -436,6 +605,25 @@ class IdentityLaunchHardeningTests {
             .andExpect(jsonPath("$.challenge_id").value(challengeId))
             .andExpect(jsonPath("$.bank_customer_ref").value(customerRef))
             .andExpect(jsonPath("$.requested_alias").value("approval-user"))
+
+        mockMvc.perform(
+            get("/identity/login-approvals")
+                .bankKey(bankA.apiKey)
+                .queryParam("status", "NOT_A_STATUS")
+        ).andExpect(status().isBadRequest)
+            .andExpect(jsonPath("$.code").value("LOGIN_APPROVAL_INVALID_FILTER"))
+
+        mockMvc.perform(
+            get("/identity/login-approvals/{challengeId}", challengeId)
+                .bankKey(unrelatedBank.apiKey)
+        ).andExpect(status().isNotFound)
+            .andExpect(jsonPath("$.code").value("LOGIN_APPROVAL_NOT_FOUND"))
+
+        mockMvc.perform(
+            get("/identity/login-approvals/{challengeId}", "missing-challenge")
+                .bankKey(bankA.apiKey)
+        ).andExpect(status().isNotFound)
+            .andExpect(jsonPath("$.code").value("LOGIN_APPROVAL_NOT_FOUND"))
     }
 
     @Test
@@ -863,16 +1051,41 @@ class IdentityLaunchHardeningTests {
         mockMvc.perform(
             post("/identity/login-approvals/$challengeId/approve")
                 .bankKey(bank.apiKey)
+                .jsonBody(mapOf("customerRef" to "wrong-customer-reference"))
+        ).andExpect(status().isForbidden)
+            .andExpect(jsonPath("$.code").value("LOGIN_APPROVAL_NOT_PERMITTED"))
+
+        mockMvc.perform(
+            post("/identity/login-approvals/$challengeId/approve")
+                .bankKey(bank.apiKey)
                 .jsonBody(mapOf("customerRef" to customerRef))
         ).andExpect(status().isOk)
             .andExpect(jsonPath("$.status").value("APPROVED"))
             .andExpect(jsonPath("$.bank_handle").value("bank-login"))
 
+        mockMvc.perform(
+            post("/identity/login-approvals/$challengeId/approve")
+                .bankKey(bank.apiKey)
+                .jsonBody(mapOf("customerRef" to customerRef))
+        ).andExpect(status().isConflict)
+            .andExpect(jsonPath("$.code").value("LOGIN_APPROVAL_ALREADY_ACTIONED"))
+
+        mockMvc.perform(
+            post("/identity/login-approvals/$challengeId/reject")
+                .bankKey(bank.apiKey)
+                .jsonBody(mapOf("customerRef" to customerRef))
+        ).andExpect(status().isConflict)
+            .andExpect(jsonPath("$.code").value("LOGIN_APPROVAL_ALREADY_ACTIONED"))
+
+        val approvedChallenge = portalBankLoginChallengeRepo.findById(challengeId).orElseThrow()
+        approvedChallenge.portalSessionExpiresAt = Instant.now().plusSeconds(45)
+        portalBankLoginChallengeRepo.save(approvedChallenge)
+
         mockMvc.perform(get("/auth/login/bank-approval/$challengeId"))
             .andExpect(status().isForbidden)
             .andExpect(jsonPath("$.code").value("FORBIDDEN"))
 
-        mockMvc.perform(
+        val approvedStatus = mockMvc.perform(
             get("/auth/login/bank-approval/$challengeId")
                 .header("X-OpenWave-Login-Status-Token", statusToken)
         )
@@ -880,6 +1093,63 @@ class IdentityLaunchHardeningTests {
             .andExpect(jsonPath("$.status").value("APPROVED"))
             .andExpect(jsonPath("$.session.sessionToken").isNotEmpty)
             .andExpect(jsonPath("$.session.username").value("bank-login-user"))
+            .andReturn()
+            .response
+            .contentAsString
+
+        val remainingSessionTtl = objectMapper.readTree(approvedStatus)
+            .path("session")
+            .path("expiresIn")
+            .asLong()
+        assertThat(remainingSessionTtl).isBetween(1L, 45L)
+    }
+
+    @Test
+    fun `expired login approval returns gone instead of a misleading success`() {
+        val bank = registerBank("expired-approval")
+        val iban = "LY45454545454545454545"
+        val customerRef = "cust-$iban"
+        claim(
+            bank,
+            "expired-approval-user",
+            iban,
+            nationalId = "100000000045",
+            customerEmail = "expired-approval@example.test"
+        )
+        val user = portalUserRepo.findByUsername("expired-approval-user")!!
+        val identity = identity("expired-approval-user")
+        portalBankLoginChallengeRepo.save(
+            PortalBankLoginChallengeEntity(
+                id = "expired-approval-challenge",
+                user = user,
+                identity = identity,
+                identifierType = "PHONE",
+                identifierHint = "***0045",
+                expiresAt = Instant.now().minusSeconds(1)
+            )
+        )
+
+        mockMvc.perform(
+            post("/identity/login-approvals/expired-approval-challenge/approve")
+                .bankKey(bank.apiKey)
+                .jsonBody(mapOf("customerRef" to customerRef))
+        ).andExpect(status().isGone)
+            .andExpect(jsonPath("$.code").value("LOGIN_APPROVAL_EXPIRED"))
+
+        mockMvc.perform(
+            post("/identity/login-approvals/expired-approval-challenge/reject")
+                .bankKey(bank.apiKey)
+                .jsonBody(mapOf("customerRef" to customerRef))
+        ).andExpect(status().isGone)
+            .andExpect(jsonPath("$.code").value("LOGIN_APPROVAL_EXPIRED"))
+
+        mockMvc.perform(
+            get("/identity/login-approvals")
+                .bankKey(bank.apiKey)
+                .queryParam("status", "EXPIRED")
+        ).andExpect(status().isOk)
+            .andExpect(jsonPath("$.items[0].challenge_id").value("expired-approval-challenge"))
+            .andExpect(jsonPath("$.items[0].status").value("EXPIRED"))
     }
 
     @Test
