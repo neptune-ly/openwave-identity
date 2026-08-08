@@ -80,6 +80,21 @@ class PostgresMigrationTest {
     }
 
     @Test
+    fun `legacy credential rotation migration is additive and permits full-bank overlap`() {
+        val sql = requireNotNull(javaClass.classLoader.getResourceAsStream(
+            "db/migration/V20__rotatable_legacy_bank_credentials.sql"
+        )).bufferedReader().use { it.readText() }
+
+        assertThat(sql).contains(
+            "ADD COLUMN IF NOT EXISTS legacy_api_key_active BOOLEAN NOT NULL DEFAULT TRUE",
+            "legacy_api_key_deactivated_at TIMESTAMPTZ",
+            "DROP CONSTRAINT IF EXISTS chk_bank_api_credentials_scope",
+            "'ASTRO_REGISTRY', 'FULL_BANK'"
+        )
+        assertThat(sql).doesNotContain("DROP COLUMN")
+    }
+
+    @Test
     @EnabledIfEnvironmentVariable(
         named = "OPENWAVE_TEST_POSTGRES_URL",
         matches = "jdbc:postgresql:.*"
@@ -106,7 +121,7 @@ class PostgresMigrationTest {
 
         try {
             val result = flyway.migrate()
-            assertThat(result.migrationsExecuted).isGreaterThanOrEqualTo(19)
+            assertThat(result.migrationsExecuted).isGreaterThanOrEqualTo(20)
             flyway.validate()
         } finally {
             DriverManager.getConnection(url, username, password).use { connection ->

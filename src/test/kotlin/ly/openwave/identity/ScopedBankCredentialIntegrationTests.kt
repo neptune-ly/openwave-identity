@@ -138,6 +138,24 @@ class ScopedBankCredentialIntegrationTests {
         }
     }
 
+    @Test
+    fun `full-bank replacement overlaps the legacy credential without a callable deactivation path`() {
+        val bank = registerBank("andalus")
+        // Issue a FULL_BANK key explicitly for the Nexus cutover and prove both
+        // keys work concurrently. Deactivation is intentionally not exposed.
+        val fullResponse = mockMvc.perform(
+            post("/banks/andalus/credentials").admin().json(mapOf("scope" to "FULL_BANK", "label" to "nexus-full-bank-cutover"))
+        ).andExpect(status().isCreated).andReturn().response.contentAsString
+        val fullKey = objectMapper.readTree(fullResponse).requiredText("bankApiKey")
+        claim(bank.legacyKey, "legacy-before-cutover", "LY55555555555555555555")
+        claim(fullKey, "replacement-before-cutover", "LY66666666666666666666")
+
+        mockMvc.perform(get("/banks/andalus/credentials").admin())
+            .andExpect(jsonPath("$.legacyCredential.active").value(true))
+        claim(bank.legacyKey, "legacy-after-overlap", "LY77777777777777777777")
+        claim(fullKey, "replacement-after-cutover", "LY88888888888888888888")
+    }
+
     private fun registerBank(handle: String): RegisteredBank {
         val response = mockMvc.perform(
             post("/banks").admin().json(

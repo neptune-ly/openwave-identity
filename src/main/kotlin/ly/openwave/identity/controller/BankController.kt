@@ -108,17 +108,21 @@ class BankController(
             bankHandle = issued.credential.bank.bankHandle,
             scope = issued.credential.scope,
             label = issued.credential.label,
+            keyFingerprint = issued.credential.apiKeyHash,
             bankApiKey = issued.rawApiKey,
             createdAt = issued.credential.createdAt
         )
     }
 
     @GetMapping("/{bankHandle}/credentials")
-    fun listCredentials(@PathVariable bankHandle: String): BankCredentialListResponse =
-        BankCredentialListResponse(
-            bankHandle = bankHandle,
+    fun listCredentials(@PathVariable bankHandle: String): BankCredentialListResponse {
+        val bank = bankService.getBank(bankHandle)
+        return BankCredentialListResponse(
+            bankHandle = bank.bankHandle,
+            legacyCredential = bank.toLegacyCredentialStatusResponse(),
             credentials = bankService.listCredentials(bankHandle).map { it.toResponse() }
         )
+    }
 
     @PostMapping("/{bankHandle}/credentials/{credentialId}/revoke")
     fun revokeCredential(
@@ -336,6 +340,7 @@ data class IssuedBankCredentialResponse(
     val bankHandle: String,
     val scope: BankCredentialScope,
     val label: String,
+    val keyFingerprint: String,
     val bankApiKey: String,
     val createdAt: Instant
 )
@@ -344,6 +349,7 @@ data class BankCredentialResponse(
     val id: Long,
     val scope: BankCredentialScope,
     val label: String,
+    val keyFingerprint: String,
     val active: Boolean,
     val revokedAt: Instant?,
     val createdAt: Instant,
@@ -352,17 +358,29 @@ data class BankCredentialResponse(
 
 data class BankCredentialListResponse(
     val bankHandle: String,
+    val legacyCredential: LegacyCredentialStatusResponse,
     val credentials: List<BankCredentialResponse>
+)
+
+data class LegacyCredentialStatusResponse(
+    val active: Boolean,
+    val deactivatedAt: Instant?
 )
 
 fun ly.openwave.identity.entity.BankApiCredentialEntity.toResponse() = BankCredentialResponse(
     id = id,
     scope = scope,
     label = label,
+    keyFingerprint = apiKeyHash,
     active = active,
     revokedAt = revokedAt,
     createdAt = createdAt,
     createdBy = createdBy
+)
+
+fun BankEntity.toLegacyCredentialStatusResponse() = LegacyCredentialStatusResponse(
+    active = legacyApiKeyActive,
+    deactivatedAt = legacyApiKeyDeactivatedAt
 )
 
 data class BankBrandingRequest(
