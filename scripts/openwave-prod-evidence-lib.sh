@@ -99,6 +99,26 @@ ow_prepare_lock_file() {
         || ow_fail "runner cannot share the persistent production lock; align runner user/group permissions"
 }
 
+ow_live_compose_service_id() {
+    local compose_dir="$1" compose_file="$2" env_file="$3" service="$4"
+    local cid label running
+
+    case "${service}" in
+        identity|astro) ;;
+        *) ow_fail "unsupported live network anchor service: ${service}" ;;
+    esac
+    [ -d "${compose_dir}" ] && [ ! -L "${compose_dir}" ] \
+        || ow_fail "live compose directory is missing or unsafe"
+    cid="$(cd "${compose_dir}" && docker compose --env-file "${env_file}" -f "${compose_file}" ps -q "${service}")"
+    [[ "${cid}" =~ ^[0-9a-f]{12,64}$ ]] \
+        || ow_fail "live ${service} service did not resolve to exactly one container"
+    running="$(docker inspect -f '{{.State.Running}}' "${cid}")"
+    [ "${running}" = true ] || ow_fail "live ${service} network anchor is not running"
+    label="$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.service" }}' "${cid}")"
+    [ "${label}" = "${service}" ] || ow_fail "live network anchor service label mismatch"
+    printf '%s\n' "${cid}"
+}
+
 ow_verify_dedicated_secret_material() {
     local backup_key_file="$1"
     local attestation_key_file="$2"
