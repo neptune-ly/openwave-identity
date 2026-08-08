@@ -108,6 +108,15 @@ The first V18 release requires no V18 history row and no `retired_handles`
 object; later releases require the signed receipt written only after the first
 successful public deploy.
 
+The encrypted backups, signed evidence, and V18 receipt live under the
+runner-owned mode-700 namespace
+`/opt/openwave/neptune-astro/deploy/hetzner/.env.openwave-release`. The existing
+`.env.*` ignore rule keeps this operational state out of the live Git checkout;
+do not move it to a new root-owned `/opt/openwave` directory or grant the runner
+broader sudo access just to create release evidence. The shared lock remains at
+`/opt/openwave/neptune-astro/deploy/hetzner/.openwave-prod-deploy.lock` so old
+and new release scripts serialize against the same inode.
+
 Deploy an immutable reviewed SHA only after those checks:
 
 ```bash

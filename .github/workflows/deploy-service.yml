@@ -107,6 +107,7 @@ jobs:
       - name: Checkout the deploy script
         uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.ref }}
           persist-credentials: false
 
       - name: Deploy and verify
@@ -116,8 +117,10 @@ jobs:
           COMPOSE_DIR: /opt/openwave/neptune-astro/deploy/hetzner
           COMPOSE_FILE: docker-compose.app.yml
           PRODUCTION_ENV_FILE: /opt/openwave/neptune-astro/deploy/hetzner/.env
-          EVIDENCE_DIR: /opt/openwave/release-evidence/identity
-          BACKUP_DIR: /opt/openwave/backups/identity
+          RUNTIME_DIR: /opt/openwave/neptune-astro/deploy/hetzner/.env.openwave-release
+          EVIDENCE_DIR: /opt/openwave/neptune-astro/deploy/hetzner/.env.openwave-release/release-evidence/identity
+          BACKUP_DIR: /opt/openwave/neptune-astro/deploy/hetzner/.env.openwave-release/backups/identity
+          RELEASE_WORKSPACE: ${{ github.workspace }}
           IDENTITY_UI_DIR: /opt/openwave/ui/identity
           DEPLOY_REF: ${{ inputs.ref }}
           PROBE_HANDLE: ${{ inputs.probe_handle }}

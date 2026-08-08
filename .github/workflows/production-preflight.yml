@@ -40,8 +40,9 @@ jobs:
           COMPOSE_FILE: docker-compose.app.yml
           PRODUCTION_ENV_FILE: /opt/openwave/neptune-astro/deploy/hetzner/.env
           RELEASE_SHA: ${{ inputs.ref }}
-          EVIDENCE_DIR: /opt/openwave/release-evidence/identity
-          BACKUP_DIR: /opt/openwave/backups/identity
+          RUNTIME_DIR: /opt/openwave/neptune-astro/deploy/hetzner/.env.openwave-release
+          EVIDENCE_DIR: /opt/openwave/neptune-astro/deploy/hetzner/.env.openwave-release/release-evidence/identity
+          BACKUP_DIR: /opt/openwave/neptune-astro/deploy/hetzner/.env.openwave-release/backups/identity
         run: |
           test -n "$BACKUP_ENCRYPTION_KEY" && test -n "$PREFLIGHT_ATTESTATION_KEY" || { echo '::error::required dedicated production secrets are unset'; exit 1; }
           secret_dir="$(mktemp -d)"; chmod 700 "$secret_dir"; trap 'rm -rf "$secret_dir"' EXIT

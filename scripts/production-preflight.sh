@@ -12,11 +12,12 @@ COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.app.yml}"
 PRODUCTION_ENV_FILE="${PRODUCTION_ENV_FILE:-${COMPOSE_DIR}/.env}"
 RELEASE_SHA="${RELEASE_SHA:?RELEASE_SHA is required}"
 RELEASE_WORKSPACE="${GITHUB_WORKSPACE:-$(pwd)}"
-EVIDENCE_DIR="${EVIDENCE_DIR:-/opt/openwave/release-evidence/identity}"
-BACKUP_DIR="${BACKUP_DIR:-/opt/openwave/backups/identity}"
+RUNTIME_DIR="${RUNTIME_DIR:-${COMPOSE_DIR}/.env.openwave-release}"
+EVIDENCE_DIR="${EVIDENCE_DIR:-${RUNTIME_DIR}/release-evidence/identity}"
+BACKUP_DIR="${BACKUP_DIR:-${RUNTIME_DIR}/backups/identity}"
 BACKUP_ENCRYPTION_KEY_FILE="${BACKUP_ENCRYPTION_KEY_FILE:-/opt/openwave/secrets/prod-backup-encryption.key}"
 PREFLIGHT_ATTESTATION_KEY_FILE="${PREFLIGHT_ATTESTATION_KEY_FILE:-/opt/openwave/secrets/preflight-attestation.key}"
-LOCK_FILE=/opt/openwave/neptune-astro/deploy/hetzner/.openwave-prod-deploy.lock
+LOCK_FILE="${LOCK_FILE:-${COMPOSE_DIR}/.openwave-prod-deploy.lock}"
 
 # shellcheck disable=SC1091
 source "$(dirname "$0")/openwave-prod-evidence-lib.sh"
@@ -73,6 +74,7 @@ ow_require_command docker
 ow_require_command openssl
 ow_require_command flock
 ow_require_command python3
+ow_prepare_runtime_dir "${RUNTIME_DIR}"
 ow_prepare_lock_file "${LOCK_FILE}"
 require_regular_mode_600 "${PRODUCTION_ENV_FILE}" "production environment file"
 ow_require_secret_file "${BACKUP_ENCRYPTION_KEY_FILE}" "backup encryption key"

@@ -29,6 +29,7 @@ set -euo pipefail
 # reachable, authenticating and routing.
 
 APP_DIR="${APP_DIR:-/opt/openwave/openwave-identity}"
+RELEASE_WORKSPACE="${RELEASE_WORKSPACE:-${GITHUB_WORKSPACE:-$(pwd)}}"
 COMPOSE_DIR="${COMPOSE_DIR:-/opt/openwave/neptune-astro/deploy/hetzner}"
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.app.yml}"
 IDENTITY_UI_DIR="${IDENTITY_UI_DIR:-/opt/openwave/ui/identity}"
@@ -36,13 +37,14 @@ DEPLOY_REF="${DEPLOY_REF:-}"
 PROBE_HANDLE="${PROBE_HANDLE:-deploy-probe-does-not-exist}"
 PUBLIC_BASE_URL="${PUBLIC_BASE_URL:-https://identity.neptune.ly/v1}"
 PUBLIC_UI_URL="${PUBLIC_UI_URL:-https://identity.neptune.ly/portal/identity}"
+RUNTIME_DIR="${RUNTIME_DIR:-${COMPOSE_DIR}/.env.openwave-release}"
 # Astro and Identity share one host/compose project. GitHub concurrency is
 # repository-scoped, so the same workflow group name cannot serialize the two
 # repositories; this shared host lock does.
-LOCK_FILE="${LOCK_FILE:-/opt/openwave/neptune-astro/deploy/hetzner/.openwave-prod-deploy.lock}"
+LOCK_FILE="${LOCK_FILE:-${COMPOSE_DIR}/.openwave-prod-deploy.lock}"
 PRODUCTION_ENV_FILE="${PRODUCTION_ENV_FILE:-/opt/openwave/neptune-astro/deploy/hetzner/.env}"
-EVIDENCE_DIR="${EVIDENCE_DIR:-/opt/openwave/release-evidence/identity}"
-BACKUP_DIR="${BACKUP_DIR:-/opt/openwave/backups/identity}"
+EVIDENCE_DIR="${EVIDENCE_DIR:-${RUNTIME_DIR}/release-evidence/identity}"
+BACKUP_DIR="${BACKUP_DIR:-${RUNTIME_DIR}/backups/identity}"
 PREFLIGHT_ATTESTATION_KEY_FILE="${PREFLIGHT_ATTESTATION_KEY_FILE:-/opt/openwave/secrets/preflight-attestation.key}"
 EVIDENCE_MAX_AGE_SECONDS="${EVIDENCE_MAX_AGE_SECONDS:-14400}"
 UI_ROLLBACK_KEEP="${UI_ROLLBACK_KEEP:-5}"
@@ -66,6 +68,10 @@ DEPLOY_AUTH_TOKEN="${DEPLOY_GITHUB_TOKEN:-${GITHUB_TOKEN:-}}"
 # shellcheck disable=SC1091
 source "$(dirname "$0")/openwave-prod-evidence-lib.sh"
 ow_validate_release_sha "${DEPLOY_REF}"
+[ -d "${RELEASE_WORKSPACE}/.git" ] || ow_fail "Actions release workspace is not a git checkout"
+[ "$(git -C "${RELEASE_WORKSPACE}" rev-parse HEAD)" = "${DEPLOY_REF}" ] \
+    || ow_fail "Actions deploy checkout does not equal the immutable release SHA"
+ow_prepare_runtime_dir "${RUNTIME_DIR}"
 ow_prepare_lock_file "${LOCK_FILE}"
 
 # CLEAR ANY PREVIOUS REWRITE FIRST, and remove ours on the way out.
