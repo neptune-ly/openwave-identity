@@ -38,6 +38,7 @@ PROBE_HANDLE="${PROBE_HANDLE:-deploy-probe-does-not-exist}"
 PUBLIC_BASE_URL="${PUBLIC_BASE_URL:-https://identity.neptune.ly/v1}"
 PUBLIC_UI_URL="${PUBLIC_UI_URL:-https://identity.neptune.ly/portal/identity}"
 RUNTIME_DIR="${RUNTIME_DIR:-${COMPOSE_DIR}/.env.openwave-release}"
+UI_ROLLBACK_DIR="${UI_ROLLBACK_DIR:-${RUNTIME_DIR}/ui-rollbacks/identity}"
 # Astro and Identity share one host/compose project. GitHub concurrency is
 # repository-scoped, so the same workflow group name cannot serialize the two
 # repositories; this shared host lock does.
@@ -105,6 +106,23 @@ clear_git_url_rewrites() {
 (
     flock -n 9 || { log "ERROR: another OpenWave host deploy is already running."; exit 75; }
 
+    [ "${UI_ROLLBACK_DIR}" = "${RUNTIME_DIR}/ui-rollbacks/identity" ] \
+        || ow_fail "portal rollback bundles must use the runner-owned release namespace"
+    for ui_rollback_path in "${RUNTIME_DIR}/ui-rollbacks" "${UI_ROLLBACK_DIR}"; do
+        [ ! -L "${ui_rollback_path}" ] || ow_fail "portal rollback directory must not be a symlink"
+        if [ ! -e "${ui_rollback_path}" ]; then
+            umask 077
+            mkdir "${ui_rollback_path}"
+        fi
+        [ -d "${ui_rollback_path}" ] && [ ! -L "${ui_rollback_path}" ] \
+            || ow_fail "portal rollback path is not a safe directory"
+        [ "$(stat -c '%u' "${ui_rollback_path}")" = "$(id -u)" ] \
+            || ow_fail "portal rollback directory must be owned by the runner account"
+        chmod 700 "${ui_rollback_path}"
+        [ -r "${ui_rollback_path}" ] && [ -w "${ui_rollback_path}" ] && [ -x "${ui_rollback_path}" ] \
+            || ow_fail "portal rollback directory must be private and writable"
+    done
+
     # The rewrite is shared process state in the runner user's ~/.gitconfig.
     # Configure and clear it only while holding the cross-repository lock;
     # otherwise a losing Astro/Identity run can clear the winning run's token
@@ -164,6 +182,84 @@ clear_git_url_rewrites() {
     ow_require_evidence_value "${OW_VERIFIED_EVIDENCE_FILE}" production_checkout_sha "${production_checkout_sha}"
     cd "${APP_DIR}"
 
+    # Prove rollback allocation and capture the complete live portal before the
+    # production checkout moves. A filesystem or permission failure must leave
+    # both the checkout and running release untouched.
+    if ! command -v rsync >/dev/null 2>&1; then
+        log "ERROR: rsync is required to back up and publish the host-mounted Identity portal."
+        exit 1
+    fi
+    case "${IDENTITY_UI_DIR}" in
+        /opt/openwave/ui/identity) ;;
+        *)
+            log "ERROR: refusing an unexpected Identity UI target: ${IDENTITY_UI_DIR}"
+            exit 1
+            ;;
+    esac
+    mkdir -p "${IDENTITY_UI_DIR}"
+    ui_public_origin="$(python3 - "${PUBLIC_UI_URL}" <<'PY'
+import sys
+from urllib.parse import urlsplit
+
+url = urlsplit(sys.argv[1])
+if url.scheme not in {'http', 'https'} or not url.netloc or url.username or url.password:
+    raise SystemExit('invalid public portal URL')
+print(f'{url.scheme}://{url.netloc}')
+PY
+)"
+    [[ "${UI_ROLLBACK_KEEP}" =~ ^[1-9][0-9]*$ ]] || ow_fail "UI rollback retention must be a positive integer"
+    ui_backup_pending="$(mktemp -d "${UI_ROLLBACK_DIR}/.identity.rollback-pending-${ROLLBACK_SHA}.XXXXXX")"
+    cleanup_pending_ui_backup() {
+        [ -n "${ui_backup_pending:-}" ] || return 0
+        case "${ui_backup_pending}" in
+            "${UI_ROLLBACK_DIR}/.identity.rollback-pending-${ROLLBACK_SHA}."*)
+                rm -rf -- "${ui_backup_pending}"
+                ui_backup_pending=""
+                ;;
+            *)
+                log "CRITICAL: refusing to remove an unexpected pending portal backup path."
+                return 1
+                ;;
+        esac
+    }
+    trap 'clear_git_url_rewrites; cleanup_pending_ui_backup' EXIT
+    if ! rsync -a --delete "${IDENTITY_UI_DIR}/" "${ui_backup_pending}/"; then
+        cleanup_pending_ui_backup || true
+        log "ERROR: could not create a complete portal rollback bundle."
+        exit 1
+    fi
+    ui_backup_dir="${UI_ROLLBACK_DIR}/identity.rollback-${ROLLBACK_SHA}.${ui_backup_pending##*.}"
+    if ! mv -- "${ui_backup_pending}" "${ui_backup_dir}"; then
+        cleanup_pending_ui_backup || true
+        log "ERROR: could not finalize the complete portal rollback bundle."
+        exit 1
+    fi
+    ui_backup_pending=""
+    log "Previous portal bundle retained at ${ui_backup_dir}."
+
+    restore_ui_bundle() {
+        log "Restoring the previous portal bundle."
+        if ! rsync -a --delete "${ui_backup_dir}/" "${IDENTITY_UI_DIR}/"; then
+            log "CRITICAL: automatic portal restoration failed."
+            log "Manual restore: rsync -a --delete ${ui_backup_dir}/ ${IDENTITY_UI_DIR}/"
+            return 1
+        fi
+    }
+
+    # Bound retained bundles even when a later release gate fails. The newest
+    # complete live copy exists before any older copy is removed.
+    python3 - "${UI_ROLLBACK_DIR}" "${UI_ROLLBACK_KEEP}" <<'PY'
+import pathlib, re, shutil, sys
+parent = pathlib.Path(sys.argv[1]).resolve()
+keep = int(sys.argv[2])
+pattern = re.compile(r"identity\.rollback-[0-9a-f]{7,40}\.[A-Za-z0-9]{6}$")
+bundles = sorted((p for p in parent.iterdir() if p.is_dir() and not p.is_symlink() and pattern.fullmatch(p.name)), key=lambda p: p.stat().st_mtime, reverse=True)
+for bundle in bundles[keep:]:
+    if bundle.parent.resolve() != parent:
+        raise SystemExit("unsafe rollback bundle parent")
+    shutil.rmtree(bundle)
+PY
+
     git fetch --all --prune --tags
     # RESOLVE THE REMOTE REF, NOT A LOCAL BRANCH OF THE SAME NAME.
     #
@@ -189,10 +285,9 @@ clear_git_url_rewrites() {
     git checkout --detach "${RESOLVED_REF}"
     log "Deploying: $(git rev-parse --short HEAD) ($(git log -1 --pretty='%s'))"
 
-    # Caddy serves the Identity portal from this host directory, outside the
-    # container. Validate the exact release bundle and take its rollback backup
-    # before replacing the backend; a UI preflight failure must leave production
-    # entirely on the previous release.
+    # Caddy serves the Identity portal from a host directory outside the
+    # container. The live bundle is already backed up; now validate that the
+    # checked-out replacement is a complete, exact release.
     ui_source="${APP_DIR}/src/main/resources/static"
     if [ ! -f "${ui_source}/index.html" ]; then
         log "ERROR: the release contains no built Identity portal at ${ui_source}."
@@ -217,44 +312,6 @@ clear_git_url_rewrites() {
         [ -f "${ui_source}${asset_path}" ] && [ ! -L "${ui_source}${asset_path}" ] \
             || ow_fail "portal index references a missing or unsafe release asset"
     done
-    ui_public_origin="$(python3 - "${PUBLIC_UI_URL}" <<'PY'
-import sys
-from urllib.parse import urlsplit
-
-url = urlsplit(sys.argv[1])
-if url.scheme not in {'http', 'https'} or not url.netloc or url.username or url.password:
-    raise SystemExit('invalid public portal URL')
-print(f'{url.scheme}://{url.netloc}')
-PY
-)"
-    if ! command -v rsync >/dev/null 2>&1; then
-        log "ERROR: rsync is required to publish the host-mounted Identity portal."
-        exit 1
-    fi
-    case "${IDENTITY_UI_DIR}" in
-        /opt/openwave/ui/identity) ;;
-        *)
-            log "ERROR: refusing an unexpected Identity UI target: ${IDENTITY_UI_DIR}"
-            exit 1
-            ;;
-    esac
-    mkdir -p "${IDENTITY_UI_DIR}"
-    ui_backup_dir="$(mktemp -d "${IDENTITY_UI_DIR}.rollback-${ROLLBACK_SHA}.XXXXXX")"
-    if ! rsync -a --delete "${IDENTITY_UI_DIR}/" "${ui_backup_dir}/"; then
-        log "ERROR: could not create a complete portal rollback bundle."
-        exit 1
-    fi
-    log "Previous portal bundle retained at ${ui_backup_dir}."
-
-    restore_ui_bundle() {
-        log "Restoring the previous portal bundle."
-        if ! rsync -a --delete "${ui_backup_dir}/" "${IDENTITY_UI_DIR}/"; then
-            log "CRITICAL: automatic portal restoration failed."
-            log "Manual restore: rsync -a --delete ${ui_backup_dir}/ ${IDENTITY_UI_DIR}/"
-            return 1
-        fi
-    }
-
     cd "${COMPOSE_DIR}"
     export OPENWAVE_IDENTITY_RELEASE_SHA="${DEPLOY_REF}"
     # Recheck the migration state while holding the deploy lock. A preflight
@@ -271,7 +328,7 @@ PY
 )"
     pgpass_file="$(mktemp)"; chmod 600 "${pgpass_file}"
     printf '%s:%s:*:%s:%s\n' "${IDENTITY_DB_HOST}" "${IDENTITY_DB_PORT:-5432}" "${IDENTITY_DB_USER}" "${IDENTITY_DB_PASSWORD}" >"${pgpass_file}"
-    trap 'clear_git_url_rewrites; rm -f "${pgpass_file}" "${ui_asset_probe:-}"' EXIT
+    trap 'clear_git_url_rewrites; cleanup_pending_ui_backup; rm -f "${pgpass_file}" "${ui_asset_probe:-}"' EXIT
     v18_count="$(pg_client psql -h "${IDENTITY_DB_HOST}" -p "${IDENTITY_DB_PORT:-5432}" -U "${IDENTITY_DB_USER}" -d "${IDENTITY_DB_NAME}" -Atqc "SELECT count(*) FROM flyway_schema_history WHERE version = '18'")"
     v18_meta="$(pg_client psql -h "${IDENTITY_DB_HOST}" -p "${IDENTITY_DB_PORT:-5432}" -U "${IDENTITY_DB_USER}" -d "${IDENTITY_DB_NAME}" -Atqc "SELECT checksum || '|' || success FROM flyway_schema_history WHERE version = '18'")"
     v18_objects="$(pg_client psql -h "${IDENTITY_DB_HOST}" -p "${IDENTITY_DB_PORT:-5432}" -U "${IDENTITY_DB_USER}" -d "${IDENTITY_DB_NAME}" -Atqc "SELECT count(*) FROM (SELECT 1 FROM pg_class WHERE oid=to_regclass('public.retired_handles') UNION ALL SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name IN ('retired_handles','npt_identities') AND column_name IN ('handle_renamed_at','handle_rename_count','handle','former_identity_id') UNION ALL SELECT 1 FROM pg_indexes WHERE schemaname='public' AND tablename='retired_handles' AND indexname IN ('idx_retired_handles_former_identity','idx_retired_handles_retired_at') UNION ALL SELECT 1 FROM pg_constraint WHERE conrelid=to_regclass('public.retired_handles') AND conname='chk_retired_handle_canonical') q")"
@@ -422,22 +479,6 @@ PY
             exit 1
             ;;
     esac
-
-    [[ "${UI_ROLLBACK_KEEP}" =~ ^[1-9][0-9]*$ ]] || ow_fail "UI rollback retention must be a positive integer"
-    # Keep a bounded set of complete rollback bundles. Pruning runs only after
-    # the public release was proven, and only siblings matching this script's
-    # exact generated name under the validated Identity UI parent.
-    python3 - "$(dirname "${IDENTITY_UI_DIR}")" "${UI_ROLLBACK_KEEP}" <<'PY'
-import pathlib, re, shutil, sys
-parent = pathlib.Path(sys.argv[1]).resolve()
-keep = int(sys.argv[2])
-pattern = re.compile(r"identity\.rollback-[0-9a-f]{7,40}\.[A-Za-z0-9]{6}$")
-bundles = sorted((p for p in parent.iterdir() if p.is_dir() and not p.is_symlink() and pattern.fullmatch(p.name)), key=lambda p: p.stat().st_mtime, reverse=True)
-for bundle in bundles[keep:]:
-    if bundle.parent.resolve() != parent:
-        raise SystemExit("unsafe rollback bundle parent")
-    shutil.rmtree(bundle)
-PY
 
     log "Deployed $(cd "${APP_DIR}" && git rev-parse --short HEAD). Previous was ${ROLLBACK_SHORT_SHA}."
 ) 9>"${LOCK_FILE}"
