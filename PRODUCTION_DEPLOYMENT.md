@@ -78,9 +78,10 @@ What it does: on the host, resolve the requested remote ref in
 wait for the container healthcheck, and probe alias resolution over the public
 internet. After the backend probe passes, it copies the reviewed static bundle
 to the exact host-mounted `/opt/openwave/ui/identity` target, retains the prior
-bundle beside it, and requires the public portal to return HTTP 200. Identity and
-Astro use a shared host-level `flock`; GitHub concurrency groups are repository-
-scoped and are not the cross-repository lock.
+bundle beside it, and requires both the public index and every entry asset named
+by that index to byte-match the release. Identity and Astro use a shared
+host-level `flock`; GitHub concurrency groups are repository-scoped and are not
+the cross-repository lock.
 
 **A deploy is not green because the container started.** On 2026-08-01 the alias
 surface returned HTTP 500 for every input for a full day while
@@ -108,6 +109,16 @@ The first V18 release requires no V18 history row and no `retired_handles`
 object; later releases require the signed receipt written only after the first
 successful public deploy.
 
+The disposable PostgreSQL restore proves logical schema and data recovery. It
+uses `pg_restore --no-owner --no-privileges --exit-on-error`: the clean test
+cluster does not contain production roles, ownership and grants remain an
+environment-provisioning responsibility, and no schema/data restore error is
+ignored. The gate then requires the restored public-table inventory and exact
+per-table row counts to match the source digest. Any change to database roles,
+default privileges, ACLs, or RLS authorization still requires a staging or DR
+exercise with the real managed application role; this preflight does not claim
+to validate that separate property.
+
 The encrypted backups, signed evidence, and V18 receipt live under the
 runner-owned mode-700 namespace
 `/opt/openwave/neptune-astro/deploy/hetzner/.env.openwave-release`. The existing
@@ -121,6 +132,11 @@ Database proof containers share the live `identity` service's network namespace
 so production-only Docker/DNS names resolve exactly as they do for the app. They
 must never fall back to host networking or reinterpret a service name as
 loopback.
+
+Portal requests use a bounded client timeout and must end in content, a retryable
+error state, or a session-expired redirect. A loading skeleton is never an
+unbounded network state. The deploy's public byte checks prevent the Caddy bundle
+from remaining on an older index or serving a partial set of entry assets.
 
 Deploy an immutable reviewed SHA only after those checks:
 

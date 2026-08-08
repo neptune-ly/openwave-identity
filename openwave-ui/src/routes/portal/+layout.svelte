@@ -89,7 +89,12 @@
       if (session?.role === 'CUSTOMER' && response.data?.securitySetupRequired && page.url.pathname !== '/portal/security') {
         await goto(`/portal/security?return=${encodeURIComponent(currentPath)}`);
       }
-    } catch {
+    } catch (error) {
+      if (error?.response?.status === 401) {
+        auth.logout();
+        await goto('/login?reason=session-expired', { replaceState: true });
+        return;
+      }
       profile = null;
       passkeyCount = null;
     }

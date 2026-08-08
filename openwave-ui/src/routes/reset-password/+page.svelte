@@ -4,6 +4,7 @@
   import { onMount, onDestroy } from 'svelte';
   import axios from 'axios';
   import { toast } from 'svelte-sonner';
+  import { isTimeoutError, PORTAL_REQUEST_TIMEOUT_MS } from '$lib/api/client';
   import { configuredRegistryUrl } from '$lib/config';
   import { theme } from '$lib/stores/theme';
   import { Button } from '$lib/components/ui/button/index.js';
@@ -53,11 +54,13 @@
         usernameOrEmail: login,
         resetToken: token,
         newPassword
-      });
+      }, { timeout: PORTAL_REQUEST_TIMEOUT_MS });
       done = true;
       toast.success('Password changed. Sign in again to continue.');
     } catch (error) {
-      errorMsg = error.response?.data?.message || error.response?.data?.error || 'Invalid or expired reset link.';
+      errorMsg = isTimeoutError(error)
+        ? 'The identity service took too long to respond. Your password was not confirmed; retry safely.'
+        : error.response?.data?.message || error.response?.data?.error || 'Invalid or expired reset link.';
     } finally {
       loading = false;
     }

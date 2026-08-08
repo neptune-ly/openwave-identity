@@ -205,6 +205,28 @@ clear_git_url_rewrites() {
         log "       Reconcile ${ui_source} and deploy an exact remote ref."
         exit 1
     fi
+    ui_asset_list="$(mktemp)"
+    if ! python3 "${APP_DIR}/scripts/list-static-entry-assets.py" "${ui_source}/index.html" >"${ui_asset_list}"; then
+        rm -f "${ui_asset_list}"
+        ow_fail "portal index contains an unsafe release asset path"
+    fi
+    mapfile -t ui_asset_paths <"${ui_asset_list}"
+    rm -f "${ui_asset_list}"
+    [ "${#ui_asset_paths[@]}" -gt 0 ] || ow_fail "portal index declares no release assets"
+    for asset_path in "${ui_asset_paths[@]}"; do
+        [ -f "${ui_source}${asset_path}" ] && [ ! -L "${ui_source}${asset_path}" ] \
+            || ow_fail "portal index references a missing or unsafe release asset"
+    done
+    ui_public_origin="$(python3 - "${PUBLIC_UI_URL}" <<'PY'
+import sys
+from urllib.parse import urlsplit
+
+url = urlsplit(sys.argv[1])
+if url.scheme not in {'http', 'https'} or not url.netloc or url.username or url.password:
+    raise SystemExit('invalid public portal URL')
+print(f'{url.scheme}://{url.netloc}')
+PY
+)"
     if ! command -v rsync >/dev/null 2>&1; then
         log "ERROR: rsync is required to publish the host-mounted Identity portal."
         exit 1
@@ -249,7 +271,7 @@ PY
 )"
     pgpass_file="$(mktemp)"; chmod 600 "${pgpass_file}"
     printf '%s:%s:*:%s:%s\n' "${IDENTITY_DB_HOST}" "${IDENTITY_DB_PORT:-5432}" "${IDENTITY_DB_USER}" "${IDENTITY_DB_PASSWORD}" >"${pgpass_file}"
-    trap 'clear_git_url_rewrites; rm -f "${pgpass_file}"' EXIT
+    trap 'clear_git_url_rewrites; rm -f "${pgpass_file}" "${ui_asset_probe:-}"' EXIT
     v18_count="$(pg_client psql -h "${IDENTITY_DB_HOST}" -p "${IDENTITY_DB_PORT:-5432}" -U "${IDENTITY_DB_USER}" -d "${IDENTITY_DB_NAME}" -Atqc "SELECT count(*) FROM flyway_schema_history WHERE version = '18'")"
     v18_meta="$(pg_client psql -h "${IDENTITY_DB_HOST}" -p "${IDENTITY_DB_PORT:-5432}" -U "${IDENTITY_DB_USER}" -d "${IDENTITY_DB_NAME}" -Atqc "SELECT checksum || '|' || success FROM flyway_schema_history WHERE version = '18'")"
     v18_objects="$(pg_client psql -h "${IDENTITY_DB_HOST}" -p "${IDENTITY_DB_PORT:-5432}" -U "${IDENTITY_DB_USER}" -d "${IDENTITY_DB_NAME}" -Atqc "SELECT count(*) FROM (SELECT 1 FROM pg_class WHERE oid=to_regclass('public.retired_handles') UNION ALL SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name IN ('retired_handles','npt_identities') AND column_name IN ('handle_renamed_at','handle_rename_count','handle','former_identity_id') UNION ALL SELECT 1 FROM pg_indexes WHERE schemaname='public' AND tablename='retired_handles' AND indexname IN ('idx_retired_handles_former_identity','idx_retired_handles_retired_at') UNION ALL SELECT 1 FROM pg_constraint WHERE conrelid=to_regclass('public.retired_handles') AND conname='chk_retired_handle_canonical') q")"
@@ -379,6 +401,19 @@ PY
                 log "Backend rollback: $(rollback_recipe)"
                 exit 1
             fi
+            ui_asset_probe="$(mktemp)"
+            for asset_path in "${ui_asset_paths[@]}"; do
+                if ! curl -fsS --max-time 25 -o "${ui_asset_probe}" "${ui_public_origin}${asset_path}" \
+                    || ! cmp -s "${ui_source}${asset_path}" "${ui_asset_probe}"; then
+                    log "ERROR: Identity portal asset ${asset_path} is missing or differs from the release."
+                    restore_ui_bundle || true
+                    log "Backend rollback: $(rollback_recipe)"
+                    exit 1
+                fi
+            done
+            rm -f "${ui_asset_probe}"
+            ui_asset_probe=""
+            log "Identity portal entry assets are publicly serving the exact release bytes."
             ;;
         *)
             log "ERROR: Identity portal returned ${ui_code} after static sync."
