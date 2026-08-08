@@ -1,6 +1,7 @@
 package ly.openwave.identity.repository
 
 import ly.openwave.identity.entity.BankEntity
+import ly.openwave.identity.entity.BankApiCredentialEntity
 import ly.openwave.identity.entity.IdentityEntity
 import ly.openwave.identity.entity.IdentityStatus
 import ly.openwave.identity.entity.LinkedAccountEntity
@@ -13,6 +14,7 @@ import ly.openwave.identity.entity.BankLoginChallengeStatus
 import ly.openwave.identity.entity.PortalUserPasskeyEntity
 import ly.openwave.identity.entity.PortalWebAuthnChallengeEntity
 import org.springframework.data.jpa.repository.JpaRepository
+import org.springframework.data.jpa.repository.EntityGraph
 import org.springframework.data.jpa.repository.Modifying
 import org.springframework.data.jpa.repository.Query
 import org.springframework.data.domain.Page
@@ -31,6 +33,16 @@ interface BankRepository : JpaRepository<BankEntity, Long> {
     fun countByActiveTrue(): Long
     fun findAllByActiveTrue(): List<BankEntity>
     fun findAllByCountryAndActiveTrue(country: String): List<BankEntity>
+}
+
+@Repository
+interface BankApiCredentialRepository : JpaRepository<BankApiCredentialEntity, Long> {
+    @EntityGraph(attributePaths = ["bank"])
+    fun findByApiKeyHashAndActiveTrue(hash: String): BankApiCredentialEntity?
+    fun existsByApiKeyHash(hash: String): Boolean
+    @EntityGraph(attributePaths = ["bank"])
+    fun findByIdAndBank_BankHandle(id: Long, bankHandle: String): BankApiCredentialEntity?
+    fun findAllByBank_BankHandleOrderByCreatedAtDesc(bankHandle: String): List<BankApiCredentialEntity>
 }
 
 @Repository

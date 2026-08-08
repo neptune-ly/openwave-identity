@@ -1,14 +1,15 @@
 import { et as attr, f as ensure_array_like, n as onDestroy, nt as escape_html, p as head } from "../../../chunks/index-server.js";
 import "../../../chunks/index-server2.js";
+import "../../../chunks/toast-state.svelte.js";
 import { t as theme } from "../../../chunks/theme.js";
 import "../../../chunks/client.js";
 import "../../../chunks/navigation.js";
-import { t as configuredRegistryUrl } from "../../../chunks/config.js";
-import "../../../chunks/auth.js";
+import { n as configuredRegistryUrl } from "../../../chunks/auth.js";
 import { t as Key_round } from "../../../chunks/key-round.js";
 import { n as Moon, t as Sun } from "../../../chunks/sun.js";
+import { t as PORTAL_REQUEST_TIMEOUT_MS } from "../../../chunks/client2.js";
 import { a as Card_header, i as Card_title, n as Input, o as Card, r as Card_content, s as Button, t as Label } from "../../../chunks/label.js";
-import "axios";
+import axios from "axios";
 //#region src/routes/login/+page.svelte
 function _page($$renderer, $$props) {
 	$$renderer.component(($$renderer) => {
@@ -16,9 +17,10 @@ function _page($$renderer, $$props) {
 		let username = "";
 		let password = "";
 		let loading = false;
-		let mode = "";
+		let mode = "customer";
 		let currentTheme = "light";
 		let bankApprovalTimer = null;
+		axios.create({ timeout: PORTAL_REQUEST_TIMEOUT_MS });
 		const portalModes = [
 			{
 				value: "admin",
@@ -46,6 +48,12 @@ function _page($$renderer, $$props) {
 				clearInterval(bankApprovalTimer);
 				bankApprovalTimer = null;
 			}
+		}
+		function roleLabel(value) {
+			if (value === "admin") return "Registry Admin";
+			if (value === "bank") return "Bank Portal";
+			if (value === "customer") return "Customer";
+			return "selected";
 		}
 		let $$settled = true;
 		let $$inner_renderer;
@@ -116,7 +124,7 @@ function _page($$renderer, $$props) {
 							}
 							$$renderer.push(`<!--]--> `);
 							$$renderer.push("<!--[-1-->");
-							$$renderer.push(`<form class="identity-auth-form">`);
+							$$renderer.push(`<form class="identity-auth-form" autocomplete="on">`);
 							$$renderer.push("<!--[-1-->");
 							$$renderer.push(`<div class="space-y-2">`);
 							Label($$renderer, {
@@ -129,6 +137,8 @@ function _page($$renderer, $$props) {
 							$$renderer.push(`<!----> `);
 							Input($$renderer, {
 								id: "identity-username",
+								name: "username",
+								autocomplete: "username",
 								disabled: loading,
 								placeholder: mode === "customer" ? "username, email, phone, or national ID" : "portal username",
 								get value() {
@@ -162,7 +172,9 @@ function _page($$renderer, $$props) {
 							$$renderer.push(`<!----></div> `);
 							Input($$renderer, {
 								id: "identity-password",
+								name: "password",
 								type: "password",
+								autocomplete: "current-password",
 								disabled: loading,
 								placeholder: "Portal password",
 								get value() {
@@ -175,11 +187,12 @@ function _page($$renderer, $$props) {
 							});
 							$$renderer.push(`<!----></div> <div class="grid gap-2">`);
 							Button($$renderer, {
+								type: "submit",
 								class: "w-full",
-								disabled: true,
+								disabled: false,
 								children: ($$renderer) => {
 									$$renderer.push("<!--[-1-->");
-									$$renderer.push(`Sign in as ${escape_html("Portal user")}`);
+									$$renderer.push(`Sign in as ${escape_html(roleLabel(mode))}`);
 									$$renderer.push(`<!--]-->`);
 								},
 								$$slots: { default: true }

@@ -233,6 +233,27 @@ ow_require_secret_file "${PREFLIGHT_ATTESTATION_KEY_FILE}" "preflight attestatio
         v18_gate=first_deploy_absent
     fi
 
+    # V19 has no one-shot receipt: a successful Flyway row is itself retry-safe
+    # evidence, so an interrupted deployment can be preflighted again without
+    # deadlocking behind an unrelated publication step.
+    mark_preflight_phase v19-state
+    v19_source="${RELEASE_WORKSPACE}/src/main/resources/db/migration/V19__scoped_bank_api_credentials.sql"
+    [ -f "${v19_source}" ] && [ ! -L "${v19_source}" ] || ow_fail "reviewed V19 migration source is missing or unsafe"
+    expected_v19_checksum="$(python3 "${v18_checksum_tool}" "${v19_source}")"
+    [[ "${expected_v19_checksum}" =~ ^-?[0-9]+$ ]] || ow_fail "reviewed V19 Flyway checksum is invalid"
+    v19_count="$(pg_client psql -h "${IDENTITY_DB_HOST}" -p "${IDENTITY_DB_PORT:-5432}" -U "${IDENTITY_DB_USER}" -d "${IDENTITY_DB_NAME}" -Atqc "SELECT count(*) FROM flyway_schema_history WHERE version = '19'")"
+    v19_meta="$(pg_client psql -h "${IDENTITY_DB_HOST}" -p "${IDENTITY_DB_PORT:-5432}" -U "${IDENTITY_DB_USER}" -d "${IDENTITY_DB_NAME}" -Atqc "SELECT checksum::text || '|' || CASE WHEN success THEN 't' ELSE 'f' END FROM flyway_schema_history WHERE version = '19'")"
+    v19_objects="$(pg_client psql -h "${IDENTITY_DB_HOST}" -p "${IDENTITY_DB_PORT:-5432}" -U "${IDENTITY_DB_USER}" -d "${IDENTITY_DB_NAME}" -Atqc "SELECT count(*) FROM (SELECT 1 FROM pg_class WHERE oid=to_regclass('public.bank_api_credentials') UNION ALL SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='bank_api_credentials' AND ((column_name='id' AND data_type='bigint' AND is_nullable='NO' AND column_default LIKE 'nextval(%') OR (column_name='bank_id' AND data_type='bigint' AND is_nullable='NO' AND column_default IS NULL) OR (column_name='api_key_hash' AND data_type='character varying' AND is_nullable='NO' AND column_default IS NULL) OR (column_name='scope' AND data_type='character varying' AND is_nullable='NO' AND column_default IS NULL) OR (column_name='label' AND data_type='character varying' AND is_nullable='NO' AND column_default IS NULL) OR (column_name='active' AND data_type='boolean' AND is_nullable='NO' AND column_default='true') OR (column_name='revoked_at' AND data_type='timestamp with time zone' AND is_nullable='YES' AND column_default IS NULL) OR (column_name='created_at' AND data_type='timestamp with time zone' AND is_nullable='NO' AND column_default='now()') OR (column_name='created_by' AND data_type='character varying' AND is_nullable='YES' AND column_default IS NULL)) UNION ALL SELECT 1 FROM pg_indexes WHERE schemaname='public' AND tablename='bank_api_credentials' AND indexname='idx_bank_api_credentials_active_bank' AND indexdef LIKE '% (bank_id) WHERE (active = true)' UNION ALL SELECT 1 FROM pg_constraint WHERE conrelid=to_regclass('public.bank_api_credentials') AND conname IN ('fk_bank_api_credentials_bank','chk_bank_api_credentials_scope','chk_bank_api_credentials_lifecycle') UNION ALL SELECT 1 FROM pg_constraint WHERE conrelid=to_regclass('public.bank_api_credentials') AND contype IN ('p','u') AND pg_get_constraintdef(oid) IN ('PRIMARY KEY (id)','UNIQUE (api_key_hash)')) q")"
+    if [ "${v19_count}" = 0 ] && [ "${v19_objects}" = 0 ]; then
+        v19_gate=first_deploy_absent
+    elif [ "${v19_count}" = 1 ] && [ "${v19_objects}" = 16 ] && [[ "${v19_meta}" =~ ^-?[0-9]+\|t$ ]] \
+        && [ "${v19_meta%%|*}" = "${expected_v19_checksum}" ]; then
+        v19_gate=subsequent_complete
+    else
+        ow_fail "V19 state is partial, drifted, or not an exact successful reviewed migration"
+    fi
+    ow_log "Identity V19 state: history_rows=${v19_count:-invalid} objects=${v19_objects:-invalid} gate=${v19_gate}"
+
     mark_preflight_phase signed-attestation
     evidence_tmp="$(mktemp "${EVIDENCE_DIR}/.${RELEASE_SHA}.XXXXXX")"
     cat >"${evidence_tmp}" <<EOF
@@ -252,6 +273,8 @@ restore_inventory_sha256=${restored_inventory_sha256}
 caddy_running=true
 v18_gate=${v18_gate}
 v18_object_fingerprint=${v18_fingerprint}
+v19_gate=${v19_gate}
+v19_checksum=${expected_v19_checksum}
 EOF
     ow_sign_evidence "${PREFLIGHT_ATTESTATION_KEY_FILE}" "${evidence_tmp}" "${evidence_tmp}.sig"
     mv -f "${evidence_tmp}" "${EVIDENCE_DIR}/${RELEASE_SHA}.attestation"

@@ -2,6 +2,7 @@ package ly.openwave.identity.security
 
 import ly.openwave.identity.config.RegistryProperties
 import ly.openwave.identity.entity.PortalRole
+import ly.openwave.identity.entity.BankCredentialScope
 import ly.openwave.identity.repository.PortalUserRepository
 import ly.openwave.identity.service.BankService
 import org.springframework.context.annotation.Bean
@@ -31,6 +32,7 @@ import java.security.MessageDigest
 
 const val ROLE_ADMIN       = "ROLE_ADMIN"
 const val ROLE_BANK        = "ROLE_BANK"
+const val ROLE_BANK_ASTRO_REGISTRY = "ROLE_BANK_ASTRO_REGISTRY"
 const val ROLE_CUSTOMER    = "ROLE_CUSTOMER"
 
 @Configuration
@@ -120,10 +122,23 @@ class SecurityConfig(
                 it.requestMatchers(HttpMethod.POST, "/banks/me/branding/logo").hasRole("BANK")
                 // Admin only
                 it.requestMatchers(HttpMethod.POST, "/banks").hasRole("ADMIN")
+                it.requestMatchers(HttpMethod.POST, "/banks/*/credentials").hasRole("ADMIN")
+                it.requestMatchers(HttpMethod.GET, "/banks/*/credentials").hasRole("ADMIN")
+                it.requestMatchers(HttpMethod.POST, "/banks/*/credentials/*/revoke").hasRole("ADMIN")
                 it.requestMatchers(HttpMethod.PATCH, "/banks/**").hasRole("ADMIN")
                 it.requestMatchers(HttpMethod.POST, "/banks/*/branding/logo").hasRole("ADMIN")
                 it.requestMatchers("/identity/internal/**").hasRole("ADMIN")
                 it.requestMatchers("/portal/audit-events/**").hasRole("ADMIN")
+                // Scoped Astro credentials can perform only the registry calls made by
+                // NptIdentityRegistryClient. Legacy bank keys retain their full historic
+                // BANK authority while partners migrate without a flag day.
+                it.requestMatchers(HttpMethod.POST, "/identity/claim").hasAnyRole("BANK", "BANK_ASTRO_REGISTRY")
+                it.requestMatchers(HttpMethod.PATCH, "/identity/*/handle").hasAnyRole("BANK", "BANK_ASTRO_REGISTRY")
+                it.requestMatchers(HttpMethod.GET, "/identity/handles/*/availability").hasAnyRole("BANK", "BANK_ASTRO_REGISTRY")
+                it.requestMatchers(HttpMethod.GET, "/identity/accounts").hasAnyRole("BANK", "BANK_ASTRO_REGISTRY")
+                it.requestMatchers(HttpMethod.POST, "/identity/*/accounts").hasAnyRole("BANK", "BANK_ASTRO_REGISTRY")
+                it.requestMatchers(HttpMethod.PATCH, "/identity/accounts/*/set-default", "/identity/*/accounts/iban/*/set-default").hasAnyRole("BANK", "BANK_ASTRO_REGISTRY")
+                it.requestMatchers(HttpMethod.DELETE, "/identity/accounts/*").hasAnyRole("BANK", "BANK_ASTRO_REGISTRY")
                 it.requestMatchers("/portal-users/**").hasAnyRole("ADMIN", "BANK")
                 it.requestMatchers("/customer/**").hasRole("CUSTOMER")
                 it.requestMatchers(
@@ -201,10 +216,18 @@ class ApiKeyFilter(
                 SecurityContextHolder.getContext().authentication = auth
             }
             bankKey != null -> {
-                val bank = bankService.resolveByApiKey(bankKey)
+                val credential = bankService.resolveApiKeyAuthentication(bankKey)
+                val bank = credential?.bank
                 if (bank != null && bank.active) {
+                    val authorities = buildList {
+                        if (credential.scope == BankCredentialScope.ASTRO_REGISTRY) {
+                            add(SimpleGrantedAuthority(ROLE_BANK_ASTRO_REGISTRY))
+                        } else {
+                            add(SimpleGrantedAuthority(ROLE_BANK))
+                        }
+                    }
                     val auth = UsernamePasswordAuthenticationToken(
-                        bank.bankHandle, null, listOf(SimpleGrantedAuthority(ROLE_BANK))
+                        bank.bankHandle, null, authorities
                     )
                     auth.details = bank
                     SecurityContextHolder.getContext().authentication = auth

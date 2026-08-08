@@ -6,6 +6,7 @@ import jakarta.validation.constraints.NotBlank
 import jakarta.validation.constraints.Pattern
 import jakarta.validation.constraints.Size
 import ly.openwave.identity.entity.BankEntity
+import ly.openwave.identity.entity.BankCredentialScope
 import ly.openwave.identity.entity.BankLoginChallengeStatus
 import ly.openwave.identity.security.callerBankHandle
 import ly.openwave.identity.service.BrandingAssetService
@@ -76,6 +77,64 @@ class BankController(
             portalPassword = result.portalPassword,
             registeredAt = result.bank.registeredAt
         )
+    }
+
+    @PostMapping("/{bankHandle}/credentials")
+    @ResponseStatus(HttpStatus.CREATED)
+    fun issueCredential(
+        @PathVariable bankHandle: String,
+        @Valid @RequestBody req: IssueBankCredentialRequest,
+        authentication: Authentication?
+    ): IssuedBankCredentialResponse {
+        val issued = bankService.issueCredential(
+            bankHandle = bankHandle,
+            scope = req.scope,
+            label = req.label,
+            createdBy = authentication?.name
+        )
+        auditService.record(
+            authentication,
+            "BANK_CREDENTIAL_ISSUED",
+            "BANK_CREDENTIAL",
+            issued.credential.id.toString(),
+            mapOf(
+                "bank_handle" to issued.credential.bank.bankHandle,
+                "scope" to issued.credential.scope.name,
+                "label" to issued.credential.label
+            )
+        )
+        return IssuedBankCredentialResponse(
+            credentialId = issued.credential.id,
+            bankHandle = issued.credential.bank.bankHandle,
+            scope = issued.credential.scope,
+            label = issued.credential.label,
+            bankApiKey = issued.rawApiKey,
+            createdAt = issued.credential.createdAt
+        )
+    }
+
+    @GetMapping("/{bankHandle}/credentials")
+    fun listCredentials(@PathVariable bankHandle: String): BankCredentialListResponse =
+        BankCredentialListResponse(
+            bankHandle = bankHandle,
+            credentials = bankService.listCredentials(bankHandle).map { it.toResponse() }
+        )
+
+    @PostMapping("/{bankHandle}/credentials/{credentialId}/revoke")
+    fun revokeCredential(
+        @PathVariable bankHandle: String,
+        @PathVariable credentialId: Long,
+        authentication: Authentication?
+    ): BankCredentialResponse {
+        val credential = bankService.revokeCredential(bankHandle, credentialId)
+        auditService.record(
+            authentication,
+            "BANK_CREDENTIAL_REVOKED",
+            "BANK_CREDENTIAL",
+            credential.id.toString(),
+            mapOf("bank_handle" to credential.bank.bankHandle, "scope" to credential.scope.name, "label" to credential.label)
+        )
+        return credential.toResponse()
     }
 
     @PatchMapping("/{bankHandle}")
@@ -262,6 +321,48 @@ data class UpdateBankRequest(
     val brandColor: String? = null,
     val supportEmail: String? = null,
     val website: String? = null
+)
+
+data class IssueBankCredentialRequest(
+    val scope: BankCredentialScope,
+    @field:NotBlank
+    @field:Size(min = 2, max = 120)
+    @field:Pattern(regexp = "^[A-Za-z0-9][A-Za-z0-9 .:_-]{1,119}$", message = "Credential label contains unsupported characters")
+    val label: String
+)
+
+data class IssuedBankCredentialResponse(
+    val credentialId: Long,
+    val bankHandle: String,
+    val scope: BankCredentialScope,
+    val label: String,
+    val bankApiKey: String,
+    val createdAt: Instant
+)
+
+data class BankCredentialResponse(
+    val id: Long,
+    val scope: BankCredentialScope,
+    val label: String,
+    val active: Boolean,
+    val revokedAt: Instant?,
+    val createdAt: Instant,
+    val createdBy: String?
+)
+
+data class BankCredentialListResponse(
+    val bankHandle: String,
+    val credentials: List<BankCredentialResponse>
+)
+
+fun ly.openwave.identity.entity.BankApiCredentialEntity.toResponse() = BankCredentialResponse(
+    id = id,
+    scope = scope,
+    label = label,
+    active = active,
+    revokedAt = revokedAt,
+    createdAt = createdAt,
+    createdBy = createdBy
 )
 
 data class BankBrandingRequest(
