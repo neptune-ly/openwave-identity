@@ -55,6 +55,12 @@ fi
 require_literal "${v18_recovery}" "${canonical_v18_meta}" \
     'the one-shot receipt recovery must use the same canonical V18 row proof'
 # shellcheck disable=SC2016
+require_literal "${v18_recovery}" 'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"' \
+    'receipt recovery tools must resolve from the immutable Actions checkout before changing directories'
+# shellcheck disable=SC2016
+require_literal "${v18_recovery}" 'v18_checksum_tool="${SCRIPT_DIR}/flyway-sql-checksum.py"' \
+    'receipt recovery must not resolve its checksum tool from the older production checkout'
+# shellcheck disable=SC2016
 require_literal "${v18_recovery}" 'expected_v18_checksum="$(python3 "${v18_checksum_tool}" "${v18_source}")"' \
     'receipt recovery must calculate Flyway checksum from the exact failed-release migration source'
 # shellcheck disable=SC2016
