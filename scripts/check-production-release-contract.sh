@@ -20,6 +20,23 @@ require_literal() {
 
 require_literal "${preflight}" '--clean --if-exists --no-owner --no-privileges --exit-on-error' \
     'the disposable PostgreSQL restore must fail on schema/data errors without requiring production roles or ACLs'
+require_literal "${preflight}" 'set -Eeuo pipefail' \
+    'the production preflight must inherit its secret-safe ERR diagnostic into functions and command substitutions'
+require_literal "${preflight}" 'ERROR: failed phase=%s status=%s; no deployment was attempted' \
+    'the production preflight must report a safe phase and numeric status on otherwise silent failures'
+# This is a literal preflight expression, not a value to expand in this checker.
+# shellcheck disable=SC2016
+require_literal "${preflight}" 'if ! docker exec "${restore_name}" pg_isready -U postgres >/dev/null 2>&1; then' \
+    'the isolated restore readiness failure must have an explicit terminal error path'
+preflight_phase_count="$(grep -Fc -- 'mark_preflight_phase ' "${preflight}" || true)"
+[ "${preflight_phase_count}" -ge 10 ] || {
+    printf 'release contract failed: the production preflight must label every major secret-safe proof phase\n' >&2
+    exit 1
+}
+if grep -Fq -- 'BASH_COMMAND' "${preflight}"; then
+    printf 'release contract failed: preflight diagnostics must never print the failing command or its arguments\n' >&2
+    exit 1
+fi
 preflight_fingerprint_alias_count="$(grep -Foc -- "SELECT 'table:' || relname AS item" "${preflight}" || true)"
 deploy_fingerprint_alias_count="$(grep -Foc -- "SELECT 'table:' || relname AS item" "${deploy}" || true)"
 fingerprint_alias_count="$((preflight_fingerprint_alias_count + deploy_fingerprint_alias_count))"
