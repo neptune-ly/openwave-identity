@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
 
 # Creates evidence that a particular immutable Identity release can be deployed.
 # It intentionally runs on the production runner: neither database credentials
@@ -21,6 +21,23 @@ LOCK_FILE="${LOCK_FILE:-${COMPOSE_DIR}/.openwave-prod-deploy.lock}"
 
 # shellcheck disable=SC1091
 source "$(dirname "$0")/openwave-prod-evidence-lib.sh"
+
+preflight_phase=bootstrap
+
+mark_preflight_phase() {
+    preflight_phase="$1"
+    ow_log "Identity preflight phase: ${preflight_phase}"
+}
+
+report_preflight_error() {
+    local status=$?
+    trap - ERR
+    printf '[identity-preflight] ERROR: failed phase=%s status=%s; no deployment was attempted\n' \
+        "${preflight_phase}" "${status}" >&2
+    exit "${status}"
+}
+
+trap report_preflight_error ERR
 
 require_regular_mode_600() {
     local file="$1" label="$2" mode
@@ -65,9 +82,10 @@ pg_restore_inventory_digest() {
 }
 
 load_production_env() {
+    local env_exports
     # Python emits shell-quoted assignments; it accepts only conventional dotenv
     # entries and never logs a value. Do not source a production env file.
-    eval "$(python3 - "${PRODUCTION_ENV_FILE}" <<'PY'
+    if ! env_exports="$(python3 - "${PRODUCTION_ENV_FILE}" <<'PY'
 import pathlib, shlex, re, sys
 for raw in pathlib.Path(sys.argv[1]).read_text().splitlines():
     line = raw.strip()
@@ -79,9 +97,13 @@ for raw in pathlib.Path(sys.argv[1]).read_text().splitlines():
         raise SystemExit('unsafe production dotenv syntax')
     print(f'export {key}={shlex.quote(value)}')
 PY
-)"
+)"; then
+        ow_fail "production environment parsing failed"
+    fi
+    eval "${env_exports}"
 }
 
+mark_preflight_phase prerequisites
 ow_validate_release_sha "${RELEASE_SHA}"
 ow_require_command docker
 ow_require_command openssl
@@ -96,6 +118,7 @@ ow_require_secret_file "${PREFLIGHT_ATTESTATION_KEY_FILE}" "preflight attestatio
 
 (
     flock -n 9 || ow_fail "another OpenWave production operation is running"
+    mark_preflight_phase production-environment
     load_production_env
     pgpass_file="$(mktemp)"
     chmod 600 "${pgpass_file}"
@@ -103,6 +126,7 @@ ow_require_secret_file "${PREFLIGHT_ATTESTATION_KEY_FILE}" "preflight attestatio
     # shellcheck disable=SC2329
     cleanup_credentials() { rm -f "${pgpass_file}"; }
     trap cleanup_credentials EXIT
+    mark_preflight_phase release-and-live-checkouts
     [ -d "${RELEASE_WORKSPACE}/.git" ] || ow_fail "Actions release workspace is not a git checkout"
     [ "$(git -C "${RELEASE_WORKSPACE}" rev-parse HEAD)" = "${RELEASE_SHA}" ] || ow_fail "Actions checkout does not equal requested release SHA"
     cd "${APP_DIR}"
@@ -111,6 +135,7 @@ ow_require_secret_file "${PREFLIGHT_ATTESTATION_KEY_FILE}" "preflight attestatio
     production_checkout_sha="$(git rev-parse HEAD)"
 
     cd "${COMPOSE_DIR}"
+    mark_preflight_phase compose-and-serving-path
     [ -f "${COMPOSE_FILE}" ] && [ ! -L "${COMPOSE_FILE}" ] || ow_fail "compose file is unavailable"
     docker compose --env-file "${PRODUCTION_ENV_FILE}" -f "${COMPOSE_FILE}" config -q
     compose_json="$(mktemp)"
@@ -128,36 +153,48 @@ ow_require_secret_file "${PREFLIGHT_ATTESTATION_KEY_FILE}" "preflight attestatio
     backup_file="${SERVICE}-${RELEASE_SHA}-${stamp}.dump.enc"
     backup_path="${BACKUP_DIR}/${backup_file}"
     umask 077
+    mark_preflight_phase source-inventory
     source_inventory_sha256="$(pg_source_inventory_digest)"
     # Custom format permits deterministic structural verification without
     # exposing SQL. The pipe is the only copy of unencrypted production data.
-    pg_client pg_dump -h "${IDENTITY_DB_HOST}" -p "${IDENTITY_DB_PORT:-5432}" -U "${IDENTITY_DB_USER}" -Fc "${IDENTITY_DB_NAME}" \
-        | openssl enc -aes-256-cbc -pbkdf2 -salt -pass "file:${BACKUP_ENCRYPTION_KEY_FILE}" -out "${backup_path}"
+    mark_preflight_phase encrypted-backup
+    if ! pg_client pg_dump -h "${IDENTITY_DB_HOST}" -p "${IDENTITY_DB_PORT:-5432}" -U "${IDENTITY_DB_USER}" -Fc "${IDENTITY_DB_NAME}" \
+        | openssl enc -aes-256-cbc -pbkdf2 -salt -pass "file:${BACKUP_ENCRYPTION_KEY_FILE}" -out "${backup_path}"; then
+        ow_fail "encrypted PostgreSQL backup stream failed"
+    fi
     [ -s "${backup_path}" ] || ow_fail "encrypted PostgreSQL backup is empty"
 
+    mark_preflight_phase isolated-restore-readiness
     restore_name="ow-identity-restore-${stamp}-$$"
     docker run -d --rm --name "${restore_name}" -e POSTGRES_PASSWORD=restore-only postgres:16-alpine >/dev/null
     cleanup_restore() { docker rm -f "${restore_name}" >/dev/null 2>&1 || true; }
     trap 'cleanup_restore; cleanup_credentials' EXIT
     for _ in $(seq 1 30); do docker exec "${restore_name}" pg_isready -U postgres >/dev/null 2>&1 && break; sleep 1; done
-    docker exec "${restore_name}" pg_isready -U postgres >/dev/null
+    if ! docker exec "${restore_name}" pg_isready -U postgres >/dev/null 2>&1; then
+        ow_fail "isolated PostgreSQL restore did not become ready"
+    fi
     restore_database="identity_restore_ci_${stamp}"
     docker exec "${restore_name}" createdb -U postgres "${restore_database}"
     # This gate proves that the encrypted dump can recover logical schema and
     # data into a clean cluster. Production roles and grants are provisioned by
     # database operations, so the disposable cluster deliberately restores as
     # its local superuser while still failing on every schema/data restore error.
-    openssl enc -d -aes-256-cbc -pbkdf2 -pass "file:${BACKUP_ENCRYPTION_KEY_FILE}" -in "${backup_path}" \
+    mark_preflight_phase isolated-restore
+    if ! openssl enc -d -aes-256-cbc -pbkdf2 -pass "file:${BACKUP_ENCRYPTION_KEY_FILE}" -in "${backup_path}" \
         | docker exec -i "${restore_name}" pg_restore -U postgres -d "${restore_database}" \
-            --clean --if-exists --no-owner --no-privileges --exit-on-error
+            --clean --if-exists --no-owner --no-privileges --exit-on-error; then
+        ow_fail "isolated PostgreSQL restore stream failed"
+    fi
     table_count="$(docker exec "${restore_name}" psql -U postgres -d "${restore_database}" -Atqc "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public'")"
     [[ "${table_count}" =~ ^[1-9][0-9]*$ ]] || ow_fail "isolated PostgreSQL restore has no public tables"
     docker exec "${restore_name}" psql -U postgres -d "${restore_database}" -Atqc "SELECT 1 FROM flyway_schema_history LIMIT 1" >/dev/null
+    mark_preflight_phase restored-inventory
     restored_inventory_sha256="$(pg_restore_inventory_digest "${restore_name}" "${restore_database}")"
     [ "${source_inventory_sha256}" = "${restored_inventory_sha256}" ] || ow_fail "restored PostgreSQL table/row-count inventory differs from source"
     cleanup_restore
     trap cleanup_credentials EXIT
 
+    mark_preflight_phase v18-state
     v18_count="$(pg_client psql -h "${IDENTITY_DB_HOST}" -p "${IDENTITY_DB_PORT:-5432}" -U "${IDENTITY_DB_USER}" -d "${IDENTITY_DB_NAME}" -Atqc "SELECT count(*) FROM flyway_schema_history WHERE version = '18'")"
     v18_meta="$(pg_client psql -h "${IDENTITY_DB_HOST}" -p "${IDENTITY_DB_PORT:-5432}" -U "${IDENTITY_DB_USER}" -d "${IDENTITY_DB_NAME}" -Atqc "SELECT checksum || '|' || success FROM flyway_schema_history WHERE version = '18'")"
     v18_fingerprint="$(pg_client psql -h "${IDENTITY_DB_HOST}" -p "${IDENTITY_DB_PORT:-5432}" -U "${IDENTITY_DB_USER}" -d "${IDENTITY_DB_NAME}" -Atqc "SELECT md5(coalesce(string_agg(item, '|' ORDER BY item), '')) FROM (SELECT 'table:' || relname AS item FROM pg_class WHERE oid=to_regclass('public.retired_handles') UNION ALL SELECT 'column:' || column_name || ':' || data_type || ':' || is_nullable FROM information_schema.columns WHERE table_schema='public' AND table_name IN ('retired_handles','npt_identities') AND column_name IN ('handle_renamed_at','handle_rename_count','handle','former_identity_id') UNION ALL SELECT 'index:' || indexname || ':' || indexdef FROM pg_indexes WHERE schemaname='public' AND tablename='retired_handles' AND indexname IN ('idx_retired_handles_former_identity','idx_retired_handles_retired_at') UNION ALL SELECT 'constraint:' || conname || ':' || pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid=to_regclass('public.retired_handles') AND conname='chk_retired_handle_canonical') q")"
@@ -177,6 +214,7 @@ ow_require_secret_file "${PREFLIGHT_ATTESTATION_KEY_FILE}" "preflight attestatio
         v18_gate=first_deploy_absent
     fi
 
+    mark_preflight_phase signed-attestation
     evidence_tmp="$(mktemp "${EVIDENCE_DIR}/.${RELEASE_SHA}.XXXXXX")"
     cat >"${evidence_tmp}" <<EOF
 evidence_version=1
