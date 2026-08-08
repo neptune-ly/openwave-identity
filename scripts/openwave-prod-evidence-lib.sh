@@ -43,6 +43,34 @@ ow_require_secret_file() {
     [ "${owner}" = "${current}" ] || ow_fail "${label} must be owned by the runner account"
 }
 
+ow_prepare_runtime_dir() {
+    local runtime_dir="$1"
+    local expected parent owner current mode
+
+    expected="/opt/openwave/neptune-astro/deploy/hetzner/.env.openwave-release"
+    [ "${runtime_dir}" = "${expected}" ] \
+        || ow_fail "production runtime data must use the shared ignored compose namespace"
+    parent="$(dirname "${runtime_dir}")"
+    [ -d "${parent}" ] && [ ! -L "${parent}" ] && [ -w "${parent}" ] \
+        || ow_fail "runner-owned compose directory is missing or unsafe"
+    [ ! -L "${runtime_dir}" ] || ow_fail "production runtime directory must not be a symlink"
+
+    if [ ! -e "${runtime_dir}" ]; then
+        umask 077
+        mkdir "${runtime_dir}"
+    fi
+    [ -d "${runtime_dir}" ] && [ ! -L "${runtime_dir}" ] \
+        || ow_fail "production runtime path is not a safe directory"
+    owner="$(stat -c '%u' "${runtime_dir}")"
+    current="$(id -u)"
+    [ "${owner}" = "${current}" ] \
+        || ow_fail "production runtime directory must be owned by the runner account"
+    chmod 700 "${runtime_dir}"
+    mode="$(stat -c '%a' "${runtime_dir}")"
+    [ "${mode}" = 700 ] && [ -r "${runtime_dir}" ] && [ -w "${runtime_dir}" ] && [ -x "${runtime_dir}" ] \
+        || ow_fail "production runtime directory must be private and writable"
+}
+
 ow_prepare_lock_file() {
     local lock_file="$1"
     local lock_dir file_mode
