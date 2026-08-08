@@ -84,6 +84,17 @@ and every entry asset named by that index to byte-match the release. Identity
 and Astro use a shared host-level `flock`; GitHub concurrency groups are
 repository-scoped and are not the cross-repository lock.
 
+The host must provision `/opt/openwave/ui/identity` as a real directory. Before
+the backup or checkout changes, the deploy verifies that exact canonical tree
+has no symlinks, special objects, hard-linked files, or nested mounts. If an
+older container-created publish left it owned by root, the deploy uses the
+already-running Identity container's immutable image ID in a one-shot,
+networkless, read-only-rootfs helper with only `CAP_CHOWN` to assign that exact
+tree to the runner UID/GID. It then verifies every entry's ownership and the
+runner's read/write/search access. The helper cannot select another host path,
+pull an image, publish content, or broaden runner access elsewhere under
+`/opt/openwave`.
+
 **A deploy is not green because the container started.** On 2026-08-01 the alias
 surface returned HTTP 500 for every input for a full day while
 `/actuator/health` reported UP throughout — the health probe only asks whether
