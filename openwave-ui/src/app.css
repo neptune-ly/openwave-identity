@@ -37,15 +37,22 @@ html, body {
   color: #1d1d1f !important;
 }
 
+.ow-theme-root[data-theme='light'] .text-white\/85,
+.ow-theme-root[data-theme='light'] .text-white\/80,
+.ow-theme-root[data-theme='light'] .text-white\/75,
 .ow-theme-root[data-theme='light'] .text-white\/70,
+.ow-theme-root[data-theme='light'] .text-white\/65,
 .ow-theme-root[data-theme='light'] .text-white\/60,
+.ow-theme-root[data-theme='light'] .text-white\/55,
 .ow-theme-root[data-theme='light'] .text-white\/50,
+.ow-theme-root[data-theme='light'] .text-white\/45,
 .ow-theme-root[data-theme='light'] .text-white\/40 {
   color: rgba(29, 29, 31, 0.68) !important;
 }
 
 .ow-theme-root[data-theme='light'] .text-white\/35,
 .ow-theme-root[data-theme='light'] .text-white\/30,
+.ow-theme-root[data-theme='light'] .text-white\/28,
 .ow-theme-root[data-theme='light'] .text-white\/25,
 .ow-theme-root[data-theme='light'] .text-white\/20 {
   color: rgba(29, 29, 31, 0.45) !important;
@@ -1218,3 +1225,163 @@ select option {
 .neptune-splash-copy span { color: rgba(255,255,255,.68); font-size: 12px; font-weight: 760; }
 @keyframes neptuneOrbitSpin { 0% { transform: rotate(-24deg) scaleX(1.26); } 100% { transform: rotate(336deg) scaleX(1.26); } }
 @keyframes neptuneSignalPulse { 0%, 100% { transform: scale(.82); opacity: .72; } 50% { transform: scale(1); opacity: 1; } }
+
+/* One visible keyboard contract for every portal workflow. */
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 3px solid #3bc1ee !important;
+  outline-offset: 3px !important;
+  box-shadow: 0 0 0 2px rgba(7, 49, 95, 0.75);
+}
+
+.identity-form-control:focus-visible {
+  border-color: rgba(59, 193, 238, 0.85);
+}
+
+.identity-rename-status,
+.identity-rename-success {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  min-height: 3rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 1rem;
+  padding: 0.9rem 1rem;
+  color: rgba(255, 255, 255, 0.72);
+  background: rgba(255, 255, 255, 0.035);
+  font-size: 0.8125rem;
+  line-height: 1.45;
+}
+
+.identity-rename-status--available,
+.identity-rename-success {
+  border-color: rgba(16, 185, 129, 0.3);
+  color: #a7f3d0;
+  background: rgba(16, 185, 129, 0.1);
+}
+
+.identity-rename-status--blocked {
+  border-color: rgba(244, 63, 94, 0.3);
+  color: #fecdd3;
+  background: rgba(244, 63, 94, 0.1);
+}
+
+.identity-rename-status--unknown {
+  border-color: rgba(245, 158, 11, 0.32);
+  color: #fde68a;
+  background: rgba(245, 158, 11, 0.1);
+}
+
+.identity-rename-confirm {
+  border: 1px solid rgba(245, 158, 11, 0.32);
+  border-radius: 1.25rem;
+  background: linear-gradient(180deg, rgba(245, 158, 11, 0.1), rgba(255, 255, 255, 0.025));
+}
+
+.identity-inline-action {
+  border: 1px solid currentColor;
+  color: inherit;
+  background: transparent;
+}
+
+.ow-theme-root[data-theme='light'] .identity-rename-status {
+  border-color: rgba(15, 23, 42, 0.12);
+  color: #334155;
+  background: rgba(15, 23, 42, 0.04);
+}
+
+.ow-theme-root[data-theme='light'] .identity-rename-status--available,
+.ow-theme-root[data-theme='light'] .identity-rename-success {
+  border-color: rgba(5, 150, 105, 0.3);
+  color: #065f46;
+  background: rgba(16, 185, 129, 0.1);
+}
+
+.ow-theme-root[data-theme='light'] .identity-rename-status--blocked {
+  border-color: rgba(225, 29, 72, 0.28);
+  color: #9f1239;
+  background: rgba(244, 63, 94, 0.08);
+}
+
+.ow-theme-root[data-theme='light'] .identity-rename-status--unknown,
+.ow-theme-root[data-theme='light'] .identity-rename-confirm {
+  border-color: rgba(217, 119, 6, 0.3);
+  color: #78350f;
+  background: rgba(245, 158, 11, 0.09);
+}
+
+.ow-theme-root[data-theme='light'] .identity-rename-confirm .text-amber-100 {
+  color: #78350f !important;
+}
+
+[dir='rtl'] .identity-direction-icon {
+  transform: scaleX(-1);
+}
+
+.approval-grid {
+  display: grid;
+  gap: 1rem;
+  align-items: start;
+}
+
+.approval-grid--bank {
+  grid-template-columns: 10.625rem 6.875rem minmax(10rem, 1fr) 9.375rem 10.625rem 10.625rem 13.75rem;
+}
+
+.approval-grid--customer {
+  grid-template-columns: 10.625rem 6.875rem minmax(10rem, 1fr) 10rem 10.625rem 10.625rem;
+}
+
+@media (max-width: 1100px) {
+  .approval-grid--header {
+    display: none;
+  }
+
+  .approval-grid--row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.9rem 1.25rem;
+  }
+
+  .approval-grid--row > [data-label]::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: 0.35rem;
+    color: rgba(255, 255, 255, 0.36);
+    font-size: 0.625rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+
+  .ow-theme-root[data-theme='light'] .approval-grid--row > [data-label]::before {
+    color: rgba(29, 29, 31, 0.5);
+  }
+}
+
+@media (max-width: 640px) {
+  .approval-grid--row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html:focus-within {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  .animate-spin {
+    animation: none !important;
+  }
+
+  .identity-workspace-card:hover {
+    transform: none;
+  }
+}

@@ -76,7 +76,7 @@
   const mobileNav = $derived(nav.slice(0, Math.min(nav.length, 5)));
 
   function isActive(href, exact = false) {
-    const path = $page.url.pathname;
+    const path = page.url.pathname;
     return exact ? path === href : path.startsWith(href);
   }
 
@@ -189,7 +189,7 @@
         <a
           href={item.href}
           onclick={closeMobileNav}
-          class={`identity-nav-link flex items-center gap-3 px-3 py-2.5 rounded-xl text-[13px] font-medium transition-all ${active ? 'is-active bg-white/[0.09] text-white' : 'text-white/55 hover:text-white/85 hover:bg-white/[0.04]'}`}
+          class={`identity-nav-link flex min-h-12 items-center gap-3 px-3 py-2.5 rounded-xl text-[13px] font-medium transition-all ${active ? 'is-active bg-white/[0.09] text-white' : 'text-white/55 hover:text-white/85 hover:bg-white/[0.04]'}`}
         >
           <Icon class="w-4 h-4 shrink-0" />
           {item.label}
@@ -202,7 +202,7 @@
       <div class="identity-shell-faint text-[10px] font-mono truncate">{session?.baseUrl}</div>
       <button
         onclick={logout}
-        class="flex items-center gap-2.5 w-full text-[12px] text-red-400/75 hover:text-red-400 transition-colors"
+        class="flex min-h-12 items-center gap-2.5 w-full text-[12px] text-red-400/75 hover:text-red-400 transition-colors"
       >
         <LogOut class="w-3.5 h-3.5" />
         Sign out
@@ -213,11 +213,11 @@
   <!-- Main content -->
   <div class="identity-shell-main flex-1 min-h-screen flex flex-col md:ml-72 xl:ml-80">
     <!-- Top bar -->
-    <header class="identity-shell-header sticky top-0 z-30 bg-white/[0.015] border-b border-white/[0.06] backdrop-blur-xl px-4 md:px-8 py-3 flex items-center justify-between">
-      <div class="flex items-center gap-3">
+    <header class="identity-shell-header sticky top-0 z-30 flex items-center justify-between gap-2 border-b border-white/[0.06] bg-white/[0.015] px-4 py-3 backdrop-blur-xl md:px-8">
+      <div class="flex min-w-0 items-center gap-2 sm:gap-3">
         <button
           type="button"
-          class="identity-shell-button inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/[0.08] bg-white/[0.035] text-white/70 transition-all hover:bg-white/[0.06] hover:text-white md:hidden"
+          class="identity-shell-button inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-white/[0.08] bg-white/[0.035] text-white/70 transition-all hover:bg-white/[0.06] hover:text-white md:hidden"
           aria-label={mobileNavOpen ? 'Close navigation' : 'Open navigation'}
           onclick={() => (mobileNavOpen = !mobileNavOpen)}
         >
@@ -227,19 +227,19 @@
             <Menu class="w-4 h-4" />
           {/if}
         </button>
-        <div class="identity-shell-muted text-[12px]">
+        <div class="identity-shell-muted min-w-0 truncate text-[12px]">
         {#if session?.role === 'ADMIN'}
           <span class="text-indigo-400 font-medium">Registry Admin</span>
-          - {session?.portalRole || 'Registry operations'}
+          <span class="hidden sm:inline">- {session?.portalRole || 'Registry operations'}</span>
         {:else if session?.role === 'CUSTOMER'}
           <span class="text-sky-400 font-medium">Customer Portal</span>
-          - {session?.portalRole || 'Identity access'}
+          <span class="hidden sm:inline">- {session?.portalRole || 'Identity access'}</span>
         {:else}
           <span class="text-emerald-400 font-medium">Bank Portal</span>
-          - {session?.portalRole || 'Scoped operations'}
+          <span class="hidden sm:inline">- {session?.portalRole || 'Scoped operations'}</span>
         {/if}
         </div>
-        <div class="identity-role-accent">
+        <div class="identity-role-accent hidden lg:inline-flex">
           {#if session?.role === 'ADMIN'}
             <span class="h-2 w-2 rounded-full bg-indigo-400"></span>
             Registry control lane
@@ -252,15 +252,15 @@
           {/if}
         </div>
       </div>
-      <div class="flex items-center gap-3">
+      <div class="flex shrink-0 items-center gap-2 sm:gap-3">
         <button
           onclick={() => theme.toggle()}
-          class="identity-shell-button w-8 h-8 rounded-xl border border-white/[0.08] bg-white/[0.035] hover:bg-white/[0.06] text-white/65 hover:text-white flex items-center justify-center transition-all"
+          class="identity-shell-button flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-white/[0.08] bg-white/[0.035] text-white/65 transition-all hover:bg-white/[0.06] hover:text-white"
           title="Toggle theme"
         >
           {#if currentTheme === 'dark'}<Sun class="w-4 h-4" />{:else}<Moon class="w-4 h-4" />{/if}
         </button>
-        <div class="text-[11px] px-2.5 py-1 rounded-full border
+        <div class="shrink-0 rounded-full border px-2.5 py-1 text-[11px]
           {session?.role === 'ADMIN'
             ? 'bg-indigo-500/10 text-indigo-300 border-indigo-500/20'
             : session?.role === 'CUSTOMER'
@@ -278,7 +278,7 @@
           <div class="text-sm font-semibold text-white">Finish customer security setup</div>
           <div class="text-[12px] text-white/50">{profile?.securitySetupReason || 'Add a passkey or confirm an authenticator before using the customer portal.'}</div>
         </div>
-        {#if $page.url.pathname !== '/portal/security'}
+        {#if page.url.pathname !== '/portal/security'}
           <a href="/portal/security" class="px-3 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-[12px] font-semibold">
             Open security
           </a>

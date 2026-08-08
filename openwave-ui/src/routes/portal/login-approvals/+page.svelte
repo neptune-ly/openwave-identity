@@ -7,13 +7,12 @@
   import RefreshCw from 'lucide-svelte/icons/refresh-cw';
   import Info from 'lucide-svelte/icons/info';
   import ShieldCheck from 'lucide-svelte/icons/shield-check';
-  import CircleX from 'lucide-svelte/icons/circle-x';
   import Clock3 from 'lucide-svelte/icons/clock-3';
   import ArrowRight from 'lucide-svelte/icons/arrow-right';
 
   let loading = $state(true);
-  let actingId = $state('');
   let rows = $state([]);
+  let loadError = $state('');
   let summary = $state({ total: 0, pending: 0, approved: 0, rejected: 0, expired: 0 });
   let search = $state('');
   let status = $state('PENDING');
@@ -45,6 +44,7 @@
 
   async function loadQueue() {
     loading = true;
+    loadError = '';
     const params = new URLSearchParams({ limit: String(limit) });
     if (status) params.set('status', status);
     if (search.trim()) params.set('search', search.trim());
@@ -54,7 +54,8 @@
       summary = response.data.summary || summary;
     } else {
       rows = [];
-      toast.error(response.error || 'Could not load bank login approvals');
+      loadError = response.error || 'Could not load bank login approvals.';
+      toast.error(loadError);
     }
     loading = false;
   }
@@ -62,25 +63,6 @@
   async function applyFilters() {
     await syncQuery();
     await loadQueue();
-  }
-
-  async function act(challengeId, customerRef, action) {
-    if (!customerRef) {
-      toast.error('This approval row is missing a bank customer reference.');
-      return;
-    }
-    actingId = challengeId;
-    const response = await apiCall('post', `/identity/login-approvals/${challengeId}/${action}`, {
-      customerRef
-    });
-    actingId = '';
-    if (!response.ok) {
-      toast.error(response.error || `Could not ${action} approval`);
-      return;
-    }
-    toast.success(action === 'approve' ? 'Login approval confirmed' : 'Login approval rejected');
-    await loadQueue();
-    await syncQuery();
   }
 
   function badgeClass(rowStatus) {
@@ -99,7 +81,7 @@
   }
 
   async function openApprovalDesk(row) {
-    if (loading || actingId) return;
+    if (loading) return;
     const params = new URLSearchParams();
     if (status) params.set('status', status);
     if (search.trim()) params.set('search', search.trim());
@@ -110,7 +92,7 @@
 
 <svelte:head><title>Login Approvals - OpenWave Identity</title></svelte:head>
 
-<div class="p-8 max-w-7xl mx-auto space-y-5">
+<div class="mx-auto max-w-7xl space-y-5 p-4 sm:p-8">
   <section class="identity-expressive-band p-6">
       <div class="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
         <div class="max-w-3xl">
@@ -129,13 +111,13 @@
         <span class="inline-flex items-center gap-1 rounded-full border border-white/[0.08] px-2.5 py-1">
           Linked-bank approval
           <span class="tooltip max-w-xs" data-tip="Phone and national-ID sign-in can start from a public identifier, but the final customer session is issued only after one linked bank approves the request.">
-            <Info class={hintClass()} />
+            <Info class={hintClass()} aria-hidden="true" />
           </span>
         </span>
         <span class="inline-flex items-center gap-1 rounded-full border border-white/[0.08] px-2.5 py-1">
           Support-safe queue
           <span class="tooltip max-w-xs" data-tip="This queue shows masked identifier hints and bank customer references only. It is designed for bank-side customer verification and approval handling.">
-            <Info class={hintClass()} />
+            <Info class={hintClass()} aria-hidden="true" />
           </span>
         </span>
         </div>
@@ -161,7 +143,7 @@
   </section>
 
   <div class="flex justify-end">
-    <button onclick={loadQueue} disabled={loading} class="inline-flex items-center gap-2 rounded-xl border border-white/[0.1] px-4 py-2 text-[13px] font-medium text-white/60 transition-all hover:border-white/[0.18] hover:text-white disabled:opacity-40">
+    <button onclick={loadQueue} disabled={loading} class="inline-flex min-h-12 items-center gap-2 rounded-xl border border-white/[0.1] px-4 text-[13px] font-medium text-white/60 transition-all hover:border-white/[0.18] hover:text-white disabled:opacity-40">
       <RefreshCw class={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
       Refresh
     </button>
@@ -169,20 +151,27 @@
 
   <section class="identity-surface-card p-4">
     <div class="grid gap-3 md:grid-cols-[1fr_180px_auto]">
-      <input
-        bind:value={search}
-        onkeydown={(event) => event.key === 'Enter' && applyFilters()}
-        placeholder="Search alias, customer reference, or masked identifier"
-        class="rounded-xl border border-white/[0.1] bg-white/[0.05] px-3.5 py-2.5 text-sm text-white placeholder-white/25 outline-none focus:border-indigo-400/60"
-      />
-      <select bind:value={status} class="rounded-xl border border-white/[0.1] bg-white/[0.05] px-3.5 py-2.5 text-sm text-white outline-none focus:border-indigo-400/60">
-        <option value="PENDING">Pending</option>
-        <option value="APPROVED">Approved</option>
-        <option value="REJECTED">Rejected</option>
-        <option value="EXPIRED">Expired</option>
-        <option value="">All statuses</option>
-      </select>
-      <button onclick={applyFilters} disabled={loading} class="rounded-xl bg-white/[0.08] px-4 py-2.5 text-sm font-medium text-white/75 hover:bg-white/[0.12] disabled:opacity-40">Apply</button>
+      <div>
+        <label for="approval-search" class="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.14em] text-white/40">Search approvals</label>
+        <input
+          id="approval-search"
+          bind:value={search}
+          onkeydown={(event) => event.key === 'Enter' && applyFilters()}
+          placeholder="Alias, customer reference, or masked identifier"
+          class="min-h-12 w-full rounded-xl border border-white/[0.1] bg-white/[0.05] px-3.5 text-sm text-white placeholder-white/25 outline-none focus:border-indigo-400/60"
+        />
+      </div>
+      <div>
+        <label for="approval-status" class="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.14em] text-white/40">Status</label>
+        <select id="approval-status" bind:value={status} class="min-h-12 w-full rounded-xl border border-white/[0.1] bg-white/[0.05] px-3.5 text-sm text-white outline-none focus:border-indigo-400/60">
+          <option value="PENDING">Pending</option>
+          <option value="APPROVED">Approved</option>
+          <option value="REJECTED">Rejected</option>
+          <option value="EXPIRED">Expired</option>
+          <option value="">All statuses</option>
+        </select>
+      </div>
+      <button onclick={applyFilters} disabled={loading} class="min-h-12 self-end rounded-xl bg-white/[0.08] px-4 text-sm font-medium text-white/75 hover:bg-white/[0.12] disabled:opacity-40">Apply filters</button>
     </div>
   </section>
 
@@ -197,8 +186,8 @@
         <span class="identity-role-accent">Dedicated approval desks</span>
       </div>
     </div>
-    <div class="overflow-x-auto">
-    <div class="grid min-w-[1180px] grid-cols-[170px_110px_1fr_150px_170px_170px_220px] gap-4 border-b border-white/[0.06] px-5 py-3 text-[11px] uppercase tracking-wider text-white/25">
+    <div>
+    <div class="approval-grid approval-grid--bank approval-grid--header border-b border-white/[0.06] px-5 py-3 text-[11px] uppercase tracking-wider text-white/25" aria-hidden="true">
       <span>Status</span>
       <span>Type</span>
       <span>Alias</span>
@@ -208,13 +197,19 @@
       <span>Actions</span>
     </div>
     {#if loading}
-      <div class="p-8 text-center text-white/40">Loading...</div>
+      <div class="p-8 text-center text-white/40" role="status" aria-live="polite" aria-busy="true">Loading approvals...</div>
+    {:else if loadError}
+      <div class="p-6 text-center" role="alert">
+        <p class="text-sm text-rose-200">{loadError}</p>
+        <button type="button" onclick={loadQueue} class="identity-shell-button mt-4 min-h-12 rounded-xl border px-4 text-[13px] font-semibold">Retry</button>
+      </div>
     {:else}
       {#each rows as row}
         <div
-          class="grid min-w-[1180px] grid-cols-[170px_110px_1fr_150px_170px_170px_220px] gap-4 border-b border-white/[0.04] px-5 py-4 text-sm cursor-pointer transition-all hover:bg-white/[0.02]"
+          class="approval-grid approval-grid--bank approval-grid--row cursor-pointer border-b border-white/[0.04] px-5 py-4 text-sm transition-all hover:bg-white/[0.02]"
           role="button"
           tabindex="0"
+          aria-label={`Open ${row.status.toLowerCase()} approval for ${row.requested_alias}`}
           onclick={() => openApprovalDesk(row)}
           onkeydown={(event) => {
             if (event.key === 'Enter' || event.key === ' ') {
@@ -223,22 +218,22 @@
             }
           }}
         >
-          <div>
+          <div data-label="Status">
             <span class={`inline-flex rounded-full border px-2.5 py-1 text-[11px] font-medium ${badgeClass(row.status)}`}>{row.status}</span>
             <div class="mt-2 text-[11px] text-white/35">Expires {when(row.expires_at)}</div>
           </div>
-          <div class="text-white/75">{row.identifier_type}</div>
-          <div class="min-w-0">
+          <div data-label="Type" class="text-white/75">{row.identifier_type}</div>
+          <div data-label="Alias" class="min-w-0">
             <div class="truncate font-mono text-white">{row.requested_alias}</div>
             <div class="mt-1 text-[11px] text-white/35">Default bank: {row.default_bank_handle || 'Not set'}</div>
           </div>
-          <div class="font-mono text-white/65">{row.bank_customer_ref || '-'}</div>
-          <div class="font-mono text-white/65">{row.identifier_hint}</div>
-          <div class="text-white/55">
+          <div data-label="Customer ref" class="font-mono text-white/65">{row.bank_customer_ref || '-'}</div>
+          <div data-label="Identifier" class="font-mono text-white/65">{row.identifier_hint}</div>
+          <div data-label="Created" class="text-white/55">
             <div>{when(row.created_at)}</div>
             <div class="mt-1 text-[11px] text-white/35">{row.actioned_at ? `Actioned ${when(row.actioned_at)}` : 'Awaiting action'}</div>
           </div>
-          <div class="flex flex-wrap gap-2">
+          <div data-label="Next step" class="flex flex-wrap gap-2">
             <span class="inline-flex items-center gap-1 rounded-xl border border-white/[0.08] px-3 py-2 text-[11px] text-white/55">
               Open dedicated approval desk
             </span>
@@ -251,7 +246,7 @@
           </div>
         </div>
       {:else}
-        <div class="p-8 text-center text-white/40">No login approvals matched the current bank filter.</div>
+        <div class="p-8 text-center text-white/40" role="status" aria-live="polite">No login approvals matched the current bank filter.</div>
       {/each}
     {/if}
     </div>
@@ -269,7 +264,7 @@
         </div>
       </div>
       {#if rows.length}
-        <button onclick={() => openApprovalDesk(rows[0])} class="inline-flex items-center justify-center gap-2 rounded-xl border border-white/[0.08] px-4 py-2.5 text-[13px] font-medium text-white/70 transition-all hover:border-white/[0.18] hover:text-white">
+        <button onclick={() => openApprovalDesk(rows[0])} class="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl border border-white/[0.08] px-4 text-[13px] font-medium text-white/70 transition-all hover:border-white/[0.18] hover:text-white">
           Open first approval
           <ArrowRight class="h-4 w-4" />
         </button>

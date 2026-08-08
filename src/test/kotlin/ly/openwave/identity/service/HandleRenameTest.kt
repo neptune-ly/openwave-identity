@@ -62,6 +62,7 @@ class HandleRenameTest {
     @Mock private lateinit var retiredHandleRepo: RetiredHandleRepository
     @Mock private lateinit var portalSecurityService: PortalSecurityService
     @Mock private lateinit var credentialNotificationService: PortalCredentialNotificationService
+    @Mock private lateinit var identitySubjectLifecycleService: IdentitySubjectLifecycleService
 
     @InjectMocks private lateinit var service: IdentityService
 
@@ -137,6 +138,7 @@ class HandleRenameTest {
         service.renameHandle("ahmed", "ahmed.ali", "andalus", nationalId)
 
         verify(portalUserService).renameCustomerUser("ahmed", "ahmed.ali")
+        verify(identitySubjectLifecycleService).revokeForHandleRename("ahmed", "ahmed.ali")
     }
 
     @Test
@@ -214,6 +216,58 @@ class HandleRenameTest {
         assertEquals(HandleAvailability.AVAILABLE, service.handleAvailability("free"))
         assertEquals(HandleAvailability.INVALID, service.handleAvailability("A!"))
         assertEquals(HandleAvailability.INVALID, service.handleAvailability("ab"))
+    }
+
+    @Test
+    @DisplayName("taken-handle errors never expose national IDs or the handle resolved from one")
+    fun takenHandleErrorsDoNotLeakKycData() {
+        val existingNationalId = "987654321098"
+        `when`(retiredHandleRepo.findByHandle(anyString())).thenReturn(null)
+        `when`(identityRepo.findByNationalId(existingNationalId)).thenReturn(
+            identity(handle = "private-existing-name", nid = existingNationalId)
+        )
+
+        val conflictByNationalId = assertThrows(HandleTakenException::class.java) {
+            service.claimHandle(
+                nptHandle = "requested-name",
+                bankHandle = "andalus",
+                iban = "LY83027000000000000000002",
+                displayName = "Customer",
+                bankCustomerRef = "ref-private-1",
+                setAsDefault = true,
+                nationalId = existingNationalId,
+                phone = "0910000001",
+                email = "customer1@example.test"
+            )
+        }
+        org.assertj.core.api.Assertions.assertThat(conflictByNationalId.message)
+            .doesNotContain(existingNationalId)
+            .doesNotContain("private-existing-name")
+            .contains("requested-name")
+
+        val differentNationalId = "111111111111"
+        `when`(identityRepo.findByNationalId(differentNationalId)).thenReturn(null)
+        `when`(identityRepo.findByNptHandle("claimed-name")).thenReturn(
+            identity(handle = "claimed-name", nid = existingNationalId)
+        )
+
+        val conflictByHandle = assertThrows(HandleTakenException::class.java) {
+            service.claimHandle(
+                nptHandle = "claimed-name",
+                bankHandle = "andalus",
+                iban = "LY83027000000000000000003",
+                displayName = "Other Customer",
+                bankCustomerRef = "ref-private-2",
+                setAsDefault = true,
+                nationalId = differentNationalId,
+                phone = "0910000002",
+                email = "customer2@example.test"
+            )
+        }
+        org.assertj.core.api.Assertions.assertThat(conflictByHandle.message)
+            .doesNotContain(existingNationalId)
+            .doesNotContain(differentNationalId)
+            .contains("claimed-name")
     }
 
     // ── who is allowed to do this ───────────────────────────────────────

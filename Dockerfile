@@ -9,6 +9,8 @@ COPY src ./src
 RUN ./gradlew bootJar --no-daemon
 
 FROM eclipse-temurin:21-jre
+ARG VCS_REF=unknown
+LABEL org.opencontainers.image.revision=$VCS_REF
 WORKDIR /app
 
 RUN apt-get update \

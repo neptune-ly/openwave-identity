@@ -12,8 +12,10 @@
   import Info from 'lucide-svelte/icons/info';
 
   let loading = $state(true);
-  let acting = $state(false);
+  let actingAction = $state('');
   let approval = $state(null);
+  let loadError = $state('');
+  let actionMessage = $state('');
 
   const challengeId = $derived(appPage.params.challengeId);
 
@@ -21,11 +23,11 @@
 
   async function loadApproval() {
     loading = true;
+    loadError = '';
     try {
       const response = await apiCall('get', `/identity/login-approvals/${challengeId}`);
       if (!response.ok) {
-        toast.error(response.error || 'Could not load approval desk');
-        await goto('/portal/login-approvals');
+        loadError = response.error || 'Could not load approval desk. Nothing was actioned.';
         return;
       }
       approval = response.data;
@@ -74,16 +76,27 @@
       toast.error('This approval row is missing a bank customer reference.');
       return;
     }
-    acting = true;
+    actingAction = action;
+    actionMessage = `${action === 'approve' ? 'Approving' : 'Rejecting'} this sign-in…`;
     const response = await apiCall('post', `/identity/login-approvals/${approval.challenge_id}/${action}`, {
       customerRef: approval.bank_customer_ref
     });
-    acting = false;
+    actingAction = '';
     if (!response.ok) {
-      toast.error(response.error || `Could not ${action} approval`);
+      actionMessage = response.error || `Could not ${action} approval. Nothing changed.`;
+      toast.error(actionMessage);
+      if (response.status === 409 || response.status === 410) await loadApproval();
       return;
     }
-    toast.success(action === 'approve' ? 'Login approval confirmed' : 'Login approval rejected');
+    const expectedStatus = action === 'approve' ? 'APPROVED' : 'REJECTED';
+    if (response.data?.status !== expectedStatus) {
+      actionMessage = `No new action was completed. The registry reports ${response.data?.status || 'an unknown status'}.`;
+      toast.error(actionMessage);
+      await loadApproval();
+      return;
+    }
+    actionMessage = action === 'approve' ? 'Login approval confirmed.' : 'Login approval rejected.';
+    toast.success(actionMessage);
     await loadApproval();
   }
 
@@ -94,18 +107,18 @@
 
 <svelte:head><title>Login Approval Desk - OpenWave Identity</title></svelte:head>
 
-<div class="p-8 max-w-5xl mx-auto space-y-6">
+<div class="mx-auto max-w-5xl space-y-6 p-4 sm:p-8">
   <div class="flex flex-wrap items-center justify-between gap-3">
-    <a href={backHref()} class="identity-shell-button inline-flex items-center gap-2 rounded-xl border px-4 py-2 text-[13px] font-medium transition-all hover:text-white">
+    <a href={backHref()} class="identity-shell-button inline-flex min-h-12 items-center gap-2 rounded-xl border px-4 text-[13px] font-medium transition-all hover:text-white">
       <ArrowLeft class="h-4 w-4" />
       Back to approvals
     </a>
     <div class="flex flex-wrap gap-2">
-      <button onclick={loadApproval} disabled={loading || acting} class="identity-shell-button inline-flex items-center gap-2 rounded-xl border px-4 py-2 text-[13px] font-medium transition-all hover:text-white disabled:opacity-40">
+      <button onclick={loadApproval} disabled={loading || !!actingAction} class="identity-shell-button inline-flex min-h-12 items-center gap-2 rounded-xl border px-4 py-2 text-[13px] font-medium transition-all hover:text-white disabled:opacity-40">
         <RefreshCw class={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
         Refresh
       </button>
-      <button onclick={copySummary} disabled={loading || !approval} class="inline-flex items-center gap-2 rounded-xl border border-white/[0.1] px-4 py-2 text-[13px] font-medium text-white/70 transition-all hover:border-white/[0.18] hover:text-white disabled:opacity-40">
+      <button onclick={copySummary} disabled={loading || !approval} class="inline-flex min-h-12 items-center gap-2 rounded-xl border border-white/[0.1] px-4 py-2 text-[13px] font-medium text-white/70 transition-all hover:border-white/[0.18] hover:text-white disabled:opacity-40">
         <Copy class="h-4 w-4" />
         Copy summary
       </button>
@@ -113,7 +126,13 @@
   </div>
 
   {#if loading}
-    <section class="identity-surface-card p-8 text-center text-sm text-white/40">Loading approval desk...</section>
+    <section class="identity-surface-card p-8 text-center text-sm text-white/40" role="status" aria-live="polite" aria-busy="true">Loading approval desk...</section>
+  {:else if loadError}
+    <section class="identity-surface-card p-6" role="alert">
+      <h1 class="text-lg font-semibold text-white">Approval desk unavailable</h1>
+      <p class="mt-2 text-sm text-white/55">{loadError}</p>
+      <button type="button" onclick={loadApproval} class="identity-shell-button mt-4 min-h-12 rounded-xl border px-4 text-[13px] font-semibold">Retry</button>
+    </section>
   {:else if approval}
     <section class="identity-expressive-band p-6">
       <div class="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
@@ -146,12 +165,11 @@
 
     <div class="grid gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
       <section class="identity-surface-card p-5">
-        <div class="flex items-center gap-2">
-          <div class="text-sm font-semibold text-white">Approval facts</div>
-          <span class="tooltip max-w-xs" data-tip="Use these fields to verify that the challenge belongs to the correct bank customer and alias before actioning it.">
-            <Info class={hintClass()} />
-          </span>
-        </div>
+          <div class="flex items-center gap-2">
+            <div class="text-sm font-semibold text-white">Approval facts</div>
+            <Info class={hintClass()} aria-hidden="true" />
+          </div>
+          <p class="mt-1 text-[12px] text-white/45">Verify the customer reference, alias, and masked identifier before taking an action.</p>
         <div class="mt-4 grid gap-2">
           {#each [
             ['Status', approval.status],
@@ -190,24 +208,27 @@
 
         <section class="identity-surface-card p-5">
           <div class="text-sm font-semibold text-white">Available actions</div>
-          <div class="mt-4 flex flex-col gap-3">
+          <div class="mt-4 flex flex-col gap-3" aria-busy={!!actingAction}>
             <button
               onclick={() => act('approve')}
-              disabled={acting || approval.status !== 'PENDING'}
-              class="inline-flex items-center justify-center gap-2 rounded-xl border border-emerald-500/25 bg-emerald-500/10 px-4 py-2.5 text-[13px] font-semibold text-emerald-200 transition-all hover:border-emerald-400/40 hover:text-white disabled:opacity-35"
+              disabled={!!actingAction || approval.status !== 'PENDING'}
+              class="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl border border-emerald-500/25 bg-emerald-500/10 px-4 text-[13px] font-semibold text-emerald-200 transition-all hover:border-emerald-400/40 hover:text-white disabled:opacity-35"
             >
               <ShieldCheck class="h-4 w-4" />
-              {acting ? 'Processing...' : 'Approve sign-in'}
+              {actingAction === 'approve' ? 'Approving...' : 'Approve sign-in'}
             </button>
             <button
               onclick={() => act('reject')}
-              disabled={acting || approval.status !== 'PENDING'}
-              class="inline-flex items-center justify-center gap-2 rounded-xl border border-rose-500/25 bg-rose-500/10 px-4 py-2.5 text-[13px] font-semibold text-rose-200 transition-all hover:border-rose-400/40 hover:text-white disabled:opacity-35"
+              disabled={!!actingAction || approval.status !== 'PENDING'}
+              class="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl border border-rose-500/25 bg-rose-500/10 px-4 text-[13px] font-semibold text-rose-200 transition-all hover:border-rose-400/40 hover:text-white disabled:opacity-35"
             >
               <CircleX class="h-4 w-4" />
-              {acting ? 'Processing...' : 'Reject sign-in'}
+              {actingAction === 'reject' ? 'Rejecting...' : 'Reject sign-in'}
             </button>
           </div>
+          {#if actionMessage}
+            <div class="mt-4 rounded-xl border border-white/[0.1] bg-white/[0.03] px-4 py-3 text-[12px] text-white/65" role="status" aria-live="polite" aria-atomic="true">{actionMessage}</div>
+          {/if}
           {#if approval.status !== 'PENDING'}
             <div class="mt-4 rounded-xl border border-white/[0.08] bg-black/15 px-4 py-3 text-[12px] text-white/45">
               This challenge is already {approval.status.toLowerCase()} and no longer needs a new bank action.

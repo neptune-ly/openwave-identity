@@ -1,8 +1,8 @@
 <script>
   import { browser } from '$app/environment';
-  import { goto } from '$app/navigation';
+  import { goto, replaceState } from '$app/navigation';
   import { page as appPage } from '$app/state';
-  import { onMount } from 'svelte';
+  import { onDestroy, onMount, tick } from 'svelte';
   import { get } from 'svelte/store';
   import { toast } from 'svelte-sonner';
   import { apiCall, apiPublic } from '$lib/api/client';
@@ -16,6 +16,9 @@
   import Route from 'lucide-svelte/icons/route';
   import Unlink2 from 'lucide-svelte/icons/unlink-2';
   import UserPlus from 'lucide-svelte/icons/user-plus';
+  import PencilLine from 'lucide-svelte/icons/pencil-line';
+  import CheckCircle2 from 'lucide-svelte/icons/circle-check-big';
+  import LoaderCircle from 'lucide-svelte/icons/loader-circle';
 
   const flowConfig = {
     claim: {
@@ -26,6 +29,15 @@
       icon: UserPlus,
       accent: 'text-indigo-300',
       queryKey: 'claim_handle'
+    },
+    rename: {
+      title: 'Rename NPT Handle',
+      eyebrow: 'Customer-directed recovery desk',
+      description: 'Verify a customer-requested name change and permanently retire the previous payment address.',
+      submitLabel: 'Review permanent rename',
+      icon: PencilLine,
+      accent: 'text-cyan-300',
+      queryKey: 'rename_current'
     },
     link: {
       title: 'Link Account',
@@ -65,13 +77,15 @@
     }
   };
 
-  const flowOrder = ['claim', 'link', 'unlink', 'default-account', 'default-bank'];
+  const flowOrder = ['claim', 'rename', 'link', 'unlink', 'default-account', 'default-bank'];
 
   let session = $state(null);
   let banks = $state([]);
   let flow = $state(null);
   let loadingBanks = $state(false);
   let hydrated = $state(false);
+  let routerReady = $state(false);
+  let routerReadyFrame;
 
   let enroll = $state({
     nptHandle: '',
@@ -85,6 +99,22 @@
   });
   let enrollResult = $state(null);
   let enrollLoading = $state(false);
+
+  let renameCurrentHandle = $state('');
+  let renameNewHandle = $state('');
+  let renameNationalId = $state('');
+  let renameAvailability = $state('idle');
+  let renameAvailabilityMessage = $state('Enter a new handle to check it.');
+  let renameChecking = $state(false);
+  let renameConfirming = $state(false);
+  let renameCustomerConfirmed = $state(false);
+  let renameSubmitting = $state(false);
+  let renameError = $state('');
+  let renameResult = $state(null);
+  let renameStatusRegion = $state(null);
+  let renameConfirmationHeading = $state(null);
+  let renameAvailabilityTimer;
+  let renameAvailabilityRequest = 0;
 
   let linkHandle = $state('');
   let linkIban = $state('');
@@ -109,6 +139,12 @@
   const isBank = $derived(session?.role === 'BANK');
   const current = $derived(flow ? flowConfig[flow] : null);
   const currentBankHandle = $derived(session?.bankHandle || '');
+  const canonicalRenameHandle = $derived(renameNewHandle.trim().toLowerCase());
+  const renameAddressPreview = $derived(
+    canonicalRenameHandle && currentBankHandle
+      ? `${canonicalRenameHandle}@${currentBankHandle}`
+      : canonicalRenameHandle
+  );
 
   function resolveFlow() {
     const value = appPage.params.flow;
@@ -126,6 +162,8 @@
   function applyPrefillsFromQuery() {
     const params = appPage.url.searchParams;
     enroll.nptHandle = params.get('claim_handle') || enroll.nptHandle;
+    renameCurrentHandle = params.get('rename_current') || renameCurrentHandle;
+    renameNewHandle = params.get('rename_new') || renameNewHandle;
     linkHandle = params.get('link_handle') || linkHandle;
     unlinkHandle = params.get('unlink_handle') || unlinkHandle;
     defHandle = params.get('default_handle') || defHandle;
@@ -136,11 +174,13 @@
   }
 
   function syncQuery() {
-    if (!browser || !hydrated || !flow) return;
+    if (!browser || !hydrated || !routerReady || !flow) return;
     const params = new URLSearchParams(window.location.search);
-    ['claim_handle', 'link_handle', 'unlink_handle', 'default_handle', 'default_bank_handle', 'link_customer_ref', 'unlink_bank_handle', 'default_account_bank_handle'].forEach((key) => params.delete(key));
+    ['claim_handle', 'rename_current', 'rename_new', 'link_handle', 'unlink_handle', 'default_handle', 'default_bank_handle', 'link_customer_ref', 'unlink_bank_handle', 'default_account_bank_handle'].forEach((key) => params.delete(key));
 
     if (flow === 'claim' && enroll.nptHandle.trim()) params.set('claim_handle', enroll.nptHandle.trim());
+    if (flow === 'rename' && renameCurrentHandle.trim()) params.set('rename_current', renameCurrentHandle.trim());
+    if (flow === 'rename' && canonicalRenameHandle) params.set('rename_new', canonicalRenameHandle);
     if (flow === 'link' && linkHandle.trim()) params.set('link_handle', linkHandle.trim());
     if (flow === 'link' && linkBankCustomerRef.trim()) params.set('link_customer_ref', linkBankCustomerRef.trim());
     if (flow === 'unlink' && unlinkHandle.trim()) params.set('unlink_handle', unlinkHandle.trim());
@@ -151,12 +191,14 @@
 
     const query = params.toString();
     const nextUrl = `${window.location.pathname}${query ? `?${query}` : ''}`;
-    window.history.replaceState(window.history.state, '', nextUrl);
+    replaceState(nextUrl, appPage.state);
   }
 
   async function openFlow(nextFlow) {
     const params = new URLSearchParams();
     if (nextFlow === 'claim' && enroll.nptHandle.trim()) params.set('claim_handle', enroll.nptHandle.trim());
+    if (nextFlow === 'rename' && (renameCurrentHandle.trim() || enroll.nptHandle.trim())) params.set('rename_current', renameCurrentHandle.trim() || enroll.nptHandle.trim());
+    if (nextFlow === 'rename' && canonicalRenameHandle) params.set('rename_new', canonicalRenameHandle);
     if (nextFlow === 'link' && (linkHandle.trim() || enroll.nptHandle.trim())) params.set('link_handle', linkHandle.trim() || enroll.nptHandle.trim());
     if (nextFlow === 'link' && linkBankCustomerRef.trim()) params.set('link_customer_ref', linkBankCustomerRef.trim());
     if (nextFlow === 'unlink' && (unlinkHandle.trim() || linkHandle.trim() || enroll.nptHandle.trim())) params.set('unlink_handle', unlinkHandle.trim() || linkHandle.trim() || enroll.nptHandle.trim());
@@ -189,6 +231,135 @@
     if (claimedHandle) {
       await goto(`/portal/identity/link?link_handle=${encodeURIComponent(claimedHandle)}&link_customer_ref=${encodeURIComponent(claimedCustomerRef || '')}`);
     }
+  }
+
+  function renameStateCopy(state, candidate) {
+    if (state === 'checking') return `Checking ${candidate || 'this handle'} with the registry…`;
+    if (state === 'available') return `${candidate} is available. You can review the permanent rename.`;
+    if (state === 'taken') return `${candidate} is already in use. Ask the customer to choose another name.`;
+    if (state === 'retired') return `${candidate} belonged to an identity before and can never be reused.`;
+    if (state === 'invalid') return 'Use 3–32 lowercase letters, numbers, dots, underscores, or hyphens.';
+    if (state === 'unknown') return 'Availability could not be checked. Nothing changed; retry before continuing.';
+    return 'Enter a new handle to check it.';
+  }
+
+  function renameStatusClass(state) {
+    if (state === 'available') return 'identity-rename-status identity-rename-status--available';
+    if (state === 'taken' || state === 'retired' || state === 'invalid') return 'identity-rename-status identity-rename-status--blocked';
+    if (state === 'unknown') return 'identity-rename-status identity-rename-status--unknown';
+    return 'identity-rename-status';
+  }
+
+  function scheduleRenameAvailability() {
+    if (renameAvailabilityTimer) clearTimeout(renameAvailabilityTimer);
+    const candidate = canonicalRenameHandle;
+    renameAvailabilityRequest += 1;
+    renameConfirming = false;
+    renameCustomerConfirmed = false;
+    renameResult = null;
+    renameError = '';
+
+    if (!candidate) {
+      renameAvailability = 'idle';
+      renameChecking = false;
+      renameAvailabilityMessage = renameStateCopy('idle', candidate);
+      return;
+    }
+    if (!/^[a-z0-9_.-]{3,32}$/.test(candidate) || candidate === renameCurrentHandle.trim().toLowerCase()) {
+      renameAvailability = 'invalid';
+      renameChecking = false;
+      renameAvailabilityMessage = candidate === renameCurrentHandle.trim().toLowerCase()
+        ? 'The new handle must be different from the current handle.'
+        : renameStateCopy('invalid', candidate);
+      return;
+    }
+
+    renameAvailability = 'checking';
+    renameChecking = true;
+    renameAvailabilityMessage = renameStateCopy('checking', candidate);
+    const requestId = renameAvailabilityRequest;
+    renameAvailabilityTimer = window.setTimeout(() => checkRenameAvailability(candidate, requestId), 350);
+  }
+
+  async function checkRenameAvailability(candidate = canonicalRenameHandle, requestId = ++renameAvailabilityRequest) {
+    if (renameAvailabilityTimer) {
+      clearTimeout(renameAvailabilityTimer);
+      renameAvailabilityTimer = null;
+    }
+    if (!candidate || !/^[a-z0-9_.-]{3,32}$/.test(candidate)) {
+      scheduleRenameAvailability();
+      return;
+    }
+    renameChecking = true;
+    renameAvailability = 'checking';
+    renameAvailabilityMessage = renameStateCopy('checking', candidate);
+    const response = await apiCall('get', `/identity/handles/${encodeURIComponent(candidate)}/availability`);
+    if (requestId !== renameAvailabilityRequest || candidate !== canonicalRenameHandle) return;
+    renameChecking = false;
+    if (!response.ok) {
+      renameAvailability = 'unknown';
+      renameAvailabilityMessage = renameStateCopy('unknown', candidate);
+      return;
+    }
+    const state = String(response.data?.status || '').toLowerCase();
+    renameAvailability = ['available', 'taken', 'retired', 'invalid'].includes(state) ? state : 'unknown';
+    renameAvailabilityMessage = renameStateCopy(renameAvailability, candidate);
+  }
+
+  async function reviewRename() {
+    if (renameAvailability !== 'available' || !renameCurrentHandle.trim() || !renameNationalId) return;
+    renameConfirming = true;
+    renameCustomerConfirmed = false;
+    renameError = '';
+    await tick();
+    renameConfirmationHeading?.focus();
+  }
+
+  function renameErrorCopy(response) {
+    if (response.code === 'HANDLE_TAKEN' || response.status === 409) return 'That handle was claimed before the rename completed. Check another name.';
+    if (response.code === 'HANDLE_RETIRED' || response.status === 410) return 'That handle is permanently retired and can never be reused.';
+    if (response.code === 'HANDLE_RENAME_NOT_PERMITTED' || response.status === 403) return 'This bank cannot verify this rename. Confirm the linked customer record and national ID.';
+    if (response.code === 'HANDLE_INVALID_FORMAT' || response.status === 422) return renameStateCopy('invalid', canonicalRenameHandle);
+    if (response.code === 'HANDLE_RENAME_TOO_SOON' || response.status === 429) return response.error || 'This identity is not yet eligible for another rename.';
+    return response.error || 'The rename could not be completed. Nothing changed; retry when the registry is reachable.';
+  }
+
+  async function submitRename() {
+    if (!isBank || !renameCustomerConfirmed || renameAvailability !== 'available') return;
+    renameSubmitting = true;
+    renameError = '';
+    const previousHandle = renameCurrentHandle.trim().toLowerCase();
+    const desiredHandle = canonicalRenameHandle;
+    const response = await apiCall(
+      'patch',
+      `/identity/${encodeURIComponent(previousHandle)}/handle`,
+      { newHandle: desiredHandle, nationalId: renameNationalId.trim() }
+    );
+    renameSubmitting = false;
+    if (!response.ok || response.data?.nptHandle !== desiredHandle || response.data?.reauthenticationRequired !== true) {
+      renameError = response.ok
+        ? 'The registry returned an unexpected rename result. Refresh the identity before retrying.'
+        : renameErrorCopy(response);
+      if (response.code === 'HANDLE_TAKEN') renameAvailability = 'taken';
+      if (response.code === 'HANDLE_RETIRED') renameAvailability = 'retired';
+      if (response.code === 'HANDLE_INVALID_FORMAT') renameAvailability = 'invalid';
+      await tick();
+      renameStatusRegion?.focus();
+      return;
+    }
+
+    renameResult = {
+      previousHandle,
+      newHandle: desiredHandle,
+      address: renameAddressPreview
+    };
+    renameConfirming = false;
+    renameCustomerConfirmed = false;
+    renameAvailability = 'idle';
+    renameAvailabilityMessage = 'Rename completed.';
+    toast.success('NPT handle renamed. Customer re-authentication is required.');
+    await tick();
+    renameStatusRegion?.focus();
   }
 
   async function doLink() {
@@ -277,6 +448,15 @@
       defBankSelected ||= currentBankHandle;
     }
     hydrated = true;
+    routerReadyFrame = requestAnimationFrame(() => {
+      routerReady = true;
+    });
+    if (flow === 'rename' && renameNewHandle.trim()) scheduleRenameAvailability();
+  });
+
+  onDestroy(() => {
+    if (renameAvailabilityTimer) clearTimeout(renameAvailabilityTimer);
+    if (routerReadyFrame) cancelAnimationFrame(routerReadyFrame);
   });
 
   $effect(() => {
@@ -287,11 +467,11 @@
 <svelte:head><title>{current ? `${current.title} - OpenWave Identity` : 'Identity Operations - OpenWave Identity'}</title></svelte:head>
 
 {#if current}
-  <div class="p-8 max-w-7xl mx-auto space-y-6">
+  <div class="mx-auto max-w-7xl space-y-6 p-4 sm:p-8">
     <section class="identity-expressive-band p-6">
       <div class="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
         <div class="max-w-3xl">
-          <a href="/portal/identity" class="inline-flex items-center gap-2 text-[12px] font-medium text-white/45 transition-colors hover:text-white/75">
+          <a href="/portal/identity" class="inline-flex min-h-12 items-center gap-2 text-[12px] font-medium text-white/45 transition-colors hover:text-white/75">
             <ArrowLeft class="h-4 w-4" />
             Back to workflow launcher
           </a>
@@ -421,6 +601,184 @@
               <button type="button" onclick={() => openFlow('link')} class="identity-shell-button rounded-2xl border px-5 py-3 text-[13px] font-medium">
                 Go to link account
               </button>
+            </div>
+          </section>
+        {/if}
+
+        {#if flow === 'rename'}
+          <section class="identity-surface-card p-6" aria-busy={renameSubmitting || renameChecking}>
+            <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+              <div class="max-w-3xl">
+                <h2 class="text-lg font-semibold text-white">Customer-directed NPT rename</h2>
+                <p class="mt-1 text-sm leading-6 text-white/50">
+                  The customer owns the name decision. A linked bank authenticates the request against its KYC record and submits it to the registry.
+                </p>
+              </div>
+              <span class={`inline-flex min-h-9 items-center rounded-xl border px-3 py-1.5 text-[11px] ${
+                isBank
+                  ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-300'
+                  : 'border-amber-500/20 bg-amber-500/10 text-amber-300'
+              }`}>
+                {isBank ? 'Bank authentication active' : 'Bank authentication required'}
+              </span>
+            </div>
+
+            <div class="mt-6 grid gap-4 lg:grid-cols-2">
+              <div>
+                <label for="rename-current-handle" class="mb-1.5 block text-[11px] uppercase tracking-[0.16em] text-white/40">Current NPT handle</label>
+                <input
+                  id="rename-current-handle"
+                  bind:value={renameCurrentHandle}
+                  oninput={() => {
+                    renameConfirming = false;
+                    renameResult = null;
+                    renameError = '';
+                    scheduleRenameAvailability();
+                  }}
+                  dir="ltr"
+                  autocapitalize="none"
+                  autocomplete="off"
+                  spellcheck="false"
+                  placeholder="current-name"
+                  class="identity-form-control min-h-12 w-full rounded-2xl border border-white/[0.1] bg-white/[0.05] px-4 text-[14px] text-white placeholder:text-white/25"
+                />
+              </div>
+              <div>
+                <label for="rename-new-handle" class="mb-1.5 block text-[11px] uppercase tracking-[0.16em] text-white/40">New NPT handle</label>
+                <div class="flex gap-2">
+                  <input
+                    id="rename-new-handle"
+                    bind:value={renameNewHandle}
+                    oninput={scheduleRenameAvailability}
+                    aria-describedby="rename-availability-status rename-address-preview"
+                    aria-invalid={renameAvailability === 'invalid' || renameAvailability === 'taken' || renameAvailability === 'retired'}
+                    dir="ltr"
+                    autocapitalize="none"
+                    autocomplete="off"
+                    spellcheck="false"
+                    placeholder="new-name"
+                    class="identity-form-control min-h-12 min-w-0 flex-1 rounded-2xl border border-white/[0.1] bg-white/[0.05] px-4 text-[14px] text-white placeholder:text-white/25"
+                  />
+                  <button
+                    type="button"
+                    onclick={() => checkRenameAvailability()}
+                    disabled={renameChecking || !canonicalRenameHandle}
+                    class="identity-shell-button inline-flex min-h-12 min-w-12 items-center justify-center rounded-2xl border px-4 text-[13px] font-semibold disabled:opacity-40"
+                    aria-label="Check new handle availability"
+                  >
+                    {#if renameChecking}
+                      <LoaderCircle class="h-5 w-5 animate-spin" aria-hidden="true" />
+                    {:else}
+                      Check
+                    {/if}
+                  </button>
+                </div>
+              </div>
+              <div>
+                <label for="rename-national-id" class="mb-1.5 block text-[11px] uppercase tracking-[0.16em] text-white/40">Customer national ID</label>
+                <input
+                  id="rename-national-id"
+                  bind:value={renameNationalId}
+                  oninput={() => {
+                    renameNationalId = renameNationalId.replace(/\D/g, '').slice(0, 12);
+                    renameConfirming = false;
+                    renameError = '';
+                  }}
+                  type="password"
+                  inputmode="numeric"
+                  autocomplete="off"
+                  maxlength="12"
+                  placeholder="12 digits"
+                  class="identity-form-control min-h-12 w-full rounded-2xl border border-white/[0.1] bg-white/[0.05] px-4 font-mono text-[14px] tracking-[0.18em] text-white placeholder:font-sans placeholder:tracking-normal placeholder:text-white/25"
+                />
+                <p class="mt-1.5 text-[12px] text-white/40">Used only to verify the customer record; it is never shown in availability results.</p>
+              </div>
+              <div id="rename-address-preview" class="identity-surface-soft flex min-h-12 flex-col justify-center px-4 py-3">
+                <span class="text-[10px] uppercase tracking-[0.15em] text-white/35">New payment address</span>
+                <strong class="mt-1 break-all font-mono text-sm text-white" dir="ltr">{renameAddressPreview || '—'}</strong>
+              </div>
+            </div>
+
+            <div
+              id="rename-availability-status"
+              class={`mt-4 ${renameStatusClass(renameAvailability)}`}
+              role={renameAvailability === 'unknown' ? 'alert' : 'status'}
+              aria-live="polite"
+              aria-atomic="true"
+            >
+              <div class="flex min-w-0 items-start gap-3">
+                {#if renameChecking}
+                  <LoaderCircle class="mt-0.5 h-5 w-5 shrink-0 animate-spin" aria-hidden="true" />
+                {:else if renameAvailability === 'available'}
+                  <CheckCircle2 class="mt-0.5 h-5 w-5 shrink-0" aria-hidden="true" />
+                {:else if renameAvailability === 'taken' || renameAvailability === 'retired' || renameAvailability === 'invalid' || renameAvailability === 'unknown'}
+                  <CircleAlert class="mt-0.5 h-5 w-5 shrink-0" aria-hidden="true" />
+                {/if}
+                <span>{renameAvailabilityMessage}</span>
+              </div>
+              {#if renameAvailability === 'unknown'}
+                <button type="button" onclick={() => checkRenameAvailability()} class="identity-inline-action mt-3 min-h-12 rounded-xl px-4 text-[13px] font-semibold">Retry availability check</button>
+              {/if}
+            </div>
+
+            {#if renameConfirming}
+              <section class="identity-rename-confirm mt-5 p-5" aria-labelledby="rename-confirm-heading" aria-describedby="rename-confirm-description">
+                <h3 id="rename-confirm-heading" bind:this={renameConfirmationHeading} tabindex="-1" class="text-lg font-semibold text-white outline-none">Confirm a permanent payment-address change</h3>
+                <p id="rename-confirm-description" class="mt-2 text-sm leading-6 text-white/55">
+                  <strong class="font-mono text-white" dir="ltr">{renameCurrentHandle.trim().toLowerCase()}</strong>
+                  will be permanently retired. It will not redirect to
+                  <strong class="font-mono text-white" dir="ltr">{canonicalRenameHandle}</strong>, cannot be reclaimed, and saved payees using the old address will be refused.
+                </p>
+                <div class="mt-4 rounded-2xl border border-amber-500/20 bg-amber-500/[0.08] p-4 text-[13px] leading-5 text-amber-100">
+                  This rename forces customer re-authentication and revokes delegated-app consent. The customer must sign in with the new handle and authorize delegated apps again.
+                </div>
+                <label class="mt-4 flex min-h-12 cursor-pointer items-start gap-3 rounded-2xl border border-white/[0.1] bg-white/[0.03] p-3 text-[13px] leading-5 text-white/65">
+                  <input type="checkbox" bind:checked={renameCustomerConfirmed} class="mt-0.5 h-5 w-5 shrink-0 accent-cyan-500" />
+                  <span>I confirmed that the customer requested this exact new handle and understands that the old payment address is never reusable and does not redirect.</span>
+                </label>
+                <div class="mt-4 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+                  <button type="button" onclick={() => { renameConfirming = false; renameCustomerConfirmed = false; }} disabled={renameSubmitting} class="identity-shell-button min-h-12 rounded-2xl border px-5 text-[13px] font-semibold disabled:opacity-40">Go back</button>
+                  <button type="button" onclick={submitRename} disabled={renameSubmitting || !renameCustomerConfirmed} class="min-h-12 rounded-2xl bg-cyan-500 px-5 text-[13px] font-bold text-slate-950 transition hover:bg-cyan-400 disabled:opacity-40">
+                    {renameSubmitting ? 'Renaming…' : 'Rename and retire old handle'}
+                  </button>
+                </div>
+              </section>
+            {/if}
+
+            <div bind:this={renameStatusRegion} tabindex="-1" class="mt-5 outline-none" aria-live="polite" aria-atomic="true">
+              {#if renameError}
+                <div class="identity-rename-status identity-rename-status--blocked" role="alert">
+                  <CircleAlert class="h-5 w-5 shrink-0" aria-hidden="true" />
+                  <div>
+                    <strong class="block">Rename not completed</strong>
+                    <span class="mt-1 block">{renameError}</span>
+                  </div>
+                </div>
+              {:else if renameResult}
+                <div class="identity-rename-success" role="status">
+                  <CheckCircle2 class="h-6 w-6 shrink-0" aria-hidden="true" />
+                  <div>
+                    <h3 class="font-semibold">Rename completed; customer re-authentication required</h3>
+                    <p class="mt-1 text-[13px] leading-5">
+                      <span class="font-mono" dir="ltr">{renameResult.previousHandle}</span> is permanently retired with no redirect.
+                      The new NPT address is <strong class="font-mono" dir="ltr">{renameResult.address}</strong>.
+                    </p>
+                    <p class="mt-2 text-[13px] leading-5">Ask the customer to end any existing portal session, sign in again with <strong class="font-mono" dir="ltr">{renameResult.newHandle}</strong>, and re-authorize any delegated apps.</p>
+                  </div>
+                </div>
+              {/if}
+            </div>
+
+            <div class="mt-5 flex flex-wrap gap-3">
+              <button
+                type="button"
+                onclick={reviewRename}
+                disabled={!isBank || renameSubmitting || renameChecking || renameAvailability !== 'available' || !renameCurrentHandle.trim() || renameNationalId.length !== 12}
+                class="min-h-12 rounded-2xl bg-cyan-500 px-5 text-[13px] font-bold text-slate-950 transition hover:bg-cyan-400 disabled:opacity-40"
+              >
+                {current.submitLabel}
+              </button>
+              <a href="/portal/identity" class="identity-shell-button inline-flex min-h-12 items-center rounded-2xl border px-5 text-[13px] font-semibold">Cancel safely</a>
             </div>
           </section>
         {/if}

@@ -13,6 +13,7 @@
   import ClipboardList from 'lucide-svelte/icons/clipboard-list';
   import RefreshCw from 'lucide-svelte/icons/refresh-cw';
   import Info from 'lucide-svelte/icons/info';
+  import PencilLine from 'lucide-svelte/icons/pencil-line';
 
   let session = $state(null);
   let loading = $state(false);
@@ -24,6 +25,13 @@
       description: 'Create a customer identity and establish the first bank-backed account route.',
       icon: UserPlus,
       tone: 'text-indigo-300'
+    },
+    {
+      key: 'rename',
+      title: 'Rename NPT handle',
+      description: 'Authenticate a customer-requested rename, preflight availability, and permanently retire the old payment address.',
+      icon: PencilLine,
+      tone: 'text-cyan-300'
     },
     {
       key: 'link',
@@ -82,7 +90,7 @@
         <p class="text-[11px] uppercase tracking-[0.18em] text-white/30">{isBank ? 'Bank identity desk' : 'Registry identity desk'}</p>
         <h1 class="identity-page-title mt-2 text-3xl font-semibold tracking-tight">Identity Operations</h1>
         <p class="identity-section-note mt-2 text-sm text-white/55">
-          Keep this page focused on choosing the right workflow. Open a dedicated route desk for claim, linking, routing, or removal instead of stacking every operator action into one screen.
+          Keep this page focused on choosing the right workflow. Open a dedicated route desk for claim, customer-directed rename, linking, routing, or removal instead of stacking every operator action into one screen.
         </p>
         <div class="mt-3 flex flex-wrap gap-2 text-xs text-white/45">
           <span class="identity-role-accent">
@@ -131,7 +139,7 @@
         <p class="text-[11px] uppercase tracking-[0.18em] text-white/30">Identity workflows</p>
         <h2 class="mt-2 text-lg font-semibold text-white">Open one focused desk at a time.</h2>
         <p class="mt-2 max-w-3xl text-sm text-white/45">
-          Claims, route linking, unlinking, default-account changes, and default-bank changes have different risk. They should not compete for attention on one page.
+          Claims, permanent handle renames, route linking, unlinking, default-account changes, and default-bank changes have different risk. They should not compete for attention on one page.
         </p>
       </div>
       <div class="identity-role-accent">No mixed workflow page</div>

@@ -85,6 +85,38 @@ interface PortalBankLoginChallengeRepository : JpaRepository<PortalBankLoginChal
 
     @Query(
         """
+        SELECT c FROM PortalBankLoginChallengeEntity c
+        WHERE c.identity.id = :identityId
+          AND c.status = :pendingStatus
+          AND c.expiresAt > :now
+        ORDER BY c.createdAt DESC
+        """
+    )
+    fun findActivePendingForIdentity(
+        @Param("identityId") identityId: Long,
+        @Param("pendingStatus") pendingStatus: BankLoginChallengeStatus,
+        @Param("now") now: Instant,
+        pageable: Pageable
+    ): Page<PortalBankLoginChallengeEntity>
+
+    @Query(
+        """
+        SELECT c FROM PortalBankLoginChallengeEntity c
+        WHERE c.identity.id = :identityId
+          AND c.status = :pendingStatus
+          AND c.expiresAt <= :now
+        ORDER BY c.createdAt DESC
+        """
+    )
+    fun findExpiredForIdentity(
+        @Param("identityId") identityId: Long,
+        @Param("pendingStatus") pendingStatus: BankLoginChallengeStatus,
+        @Param("now") now: Instant,
+        pageable: Pageable
+    ): Page<PortalBankLoginChallengeEntity>
+
+    @Query(
+        """
         SELECT DISTINCT c FROM PortalBankLoginChallengeEntity c
         JOIN c.identity i
         JOIN i.linkedAccounts a

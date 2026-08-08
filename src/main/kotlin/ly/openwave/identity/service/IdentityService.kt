@@ -47,7 +47,8 @@ class IdentityService(
     private val portalUserService: PortalUserService,
     private val retiredHandleRepo: ly.openwave.identity.repository.RetiredHandleRepository,
     private val portalSecurityService: PortalSecurityService,
-    private val credentialNotificationService: PortalCredentialNotificationService
+    private val credentialNotificationService: PortalCredentialNotificationService,
+    private val identitySubjectLifecycleService: IdentitySubjectLifecycleService
 ) {
     private val log = org.slf4j.LoggerFactory.getLogger(IdentityService::class.java)
 
@@ -89,10 +90,10 @@ class IdentityService(
         if (existingByNationalId != null) {
             // Customer already exists with a different username!
             if (existingByNationalId.nptHandle != nptHandle) {
-                throw HandleTakenException(
-                    "Customer with National ID $nationalId already has username '${existingByNationalId.nptHandle}'. " +
-                    "Please use existing username instead of '$nptHandle'."
-                )
+                // Never echo a national ID (or another handle resolved from it)
+                // through an availability-style conflict. Bank and edge logs
+                // commonly retain error bodies.
+                throw HandleTakenException(nptHandle)
             }
             // Same national ID, same username - proceed to link account
             val existing = existingByNationalId
@@ -151,11 +152,9 @@ class IdentityService(
         // STEP 2: Check if username is taken by someone else
         val existingByHandle = identityRepo.findByNptHandle(nptHandle)
         if (existingByHandle != null) {
-            // Username exists but different national ID - REJECT
-            throw HandleTakenException(
-                "Username '$nptHandle' is already taken by another customer (National ID: ${existingByHandle.nationalId}). " +
-                "Please choose a different username."
-            )
+            // The fact that a name is taken is enough. Its owner's KYC data must
+            // never cross the registry boundary in an error message.
+            throw HandleTakenException(nptHandle)
         }
 
         // Brand new identity — save with national_id and phone (both REQUIRED)
@@ -321,6 +320,13 @@ class IdentityService(
         // locks them out of OpenWave entirely — a rename that silently costs
         // them their login is worse than no rename at all.
         portalUserService.renameCustomerUser(previous, desired)
+
+        // Portal sessions are username-subject tokens and OAuth grants/tokens
+        // are stored under that same subject. The security filter rejects the
+        // old portal subject after the user row moves; revoke durable OAuth
+        // delegation here as well so `reauthenticationRequired` is a runtime
+        // guarantee, not just response copy.
+        identitySubjectLifecycleService.revokeForHandleRename(previous, desired)
 
         log.info(
             "Handle renamed: '{}' -> '{}' by bank '{}'; '{}' is now permanently retired",

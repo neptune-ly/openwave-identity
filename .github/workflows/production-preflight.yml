@@ -1,0 +1,51 @@
+name: Production Preflight
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Immutable, reviewed 40-character lowercase commit SHA to prove deployable'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: openwave-box-preflight
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          test "${{ vars.IDENTITY_PROD_ENABLED }}" = true || { echo '::error::IDENTITY_PROD_ENABLED is not true'; exit 1; }
+          [[ "${{ inputs.ref }}" =~ ^[0-9a-f]{40}$ ]] || { echo '::error::ref must be an immutable 40-character lowercase SHA'; exit 1; }
+  preflight:
+    needs: guard
+    runs-on: [self-hosted, openwave, astro-app]
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - name: Produce signed restore evidence
+        env:
+          BACKUP_ENCRYPTION_KEY: ${{ secrets.OPENWAVE_PROD_BACKUP_ENCRYPTION_KEY }}
+          PREFLIGHT_ATTESTATION_KEY: ${{ secrets.OPENWAVE_PROD_PREFLIGHT_ATTESTATION_KEY }}
+          APP_DIR: /opt/openwave/openwave-identity
+          COMPOSE_DIR: /opt/openwave/neptune-astro/deploy/hetzner
+          COMPOSE_FILE: docker-compose.app.yml
+          PRODUCTION_ENV_FILE: /opt/openwave/neptune-astro/deploy/hetzner/.env
+          RELEASE_SHA: ${{ inputs.ref }}
+          EVIDENCE_DIR: /opt/openwave/release-evidence/identity
+          BACKUP_DIR: /opt/openwave/backups/identity
+        run: |
+          test -n "$BACKUP_ENCRYPTION_KEY" && test -n "$PREFLIGHT_ATTESTATION_KEY" || { echo '::error::required dedicated production secrets are unset'; exit 1; }
+          secret_dir="$(mktemp -d)"; chmod 700 "$secret_dir"; trap 'rm -rf "$secret_dir"' EXIT
+          printf '%s\n' "$BACKUP_ENCRYPTION_KEY" >"$secret_dir/backup.key"
+          printf '%s\n' "$PREFLIGHT_ATTESTATION_KEY" >"$secret_dir/attestation.key"
+          chmod 600 "$secret_dir"/*.key
+          BACKUP_ENCRYPTION_KEY_FILE="$secret_dir/backup.key" PREFLIGHT_ATTESTATION_KEY_FILE="$secret_dir/attestation.key" bash scripts/production-preflight.sh

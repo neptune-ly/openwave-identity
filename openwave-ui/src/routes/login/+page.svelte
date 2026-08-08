@@ -38,7 +38,9 @@
   let bankApprovalMessage = $state('');
   let bankApprovalIdentifierHint = $state('');
   let bankApprovalExpiresIn = $state(0);
-  let bankApprovalTimer = null;
+  let bankApprovalChecking = $state(false);
+  let bankApprovalPollError = $state('');
+  let bankApprovalTimer = $state(null);
 
   const portalModes = [
     { value: 'admin', label: 'Registry Admin', hint: 'Directory and system controls' },
@@ -102,6 +104,7 @@
           bankApprovalMessage = r.data.message || 'Approve this sign-in from one of your linked bank apps.';
           bankApprovalIdentifierHint = r.data.identifier_hint || username.trim();
           bankApprovalExpiresIn = Number(r.data.expires_in || 0);
+          bankApprovalPollError = '';
           pendingSession = r.data;
           startBankApprovalPolling();
           toast.success('Open a linked bank app and approve this sign-in request.');
@@ -163,6 +166,7 @@
         bankApprovalMessage = r.data.message || 'Approve this sign-in from one of your linked bank apps.';
         bankApprovalIdentifierHint = r.data.identifier_hint || username.trim();
         bankApprovalExpiresIn = Number(r.data.expires_in || 0);
+        bankApprovalPollError = '';
         pendingSession = r.data;
         startBankApprovalPolling();
         toast.success('Authenticator accepted. Finish in your linked bank app.');
@@ -208,6 +212,8 @@
     bankApprovalMessage = '';
     bankApprovalIdentifierHint = '';
     bankApprovalExpiresIn = 0;
+    bankApprovalChecking = false;
+    bankApprovalPollError = '';
     pendingSession = null;
     stopBankApprovalPolling();
   }
@@ -227,7 +233,8 @@
   }
 
   async function checkBankApprovalStatus() {
-    if (!bankApprovalChallengeId || !bankApprovalStatusToken) return;
+    if (!bankApprovalChallengeId || !bankApprovalStatusToken || bankApprovalChecking) return;
+    bankApprovalChecking = true;
     try {
       const r = await axios.get(baseUrl + `/auth/login/bank-approval/${bankApprovalChallengeId}`, {
         headers: {
@@ -236,6 +243,7 @@
       });
       bankApprovalStatus = r.data?.status || 'PENDING';
       bankApprovalExpiresIn = Number(r.data?.expires_in || 0);
+      bankApprovalPollError = '';
       if (bankApprovalStatus === 'APPROVED' && r.data?.session?.sessionToken) {
         stopBankApprovalPolling();
         finishSessionLogin(r.data.session, 'Connected through bank approval');
@@ -246,8 +254,11 @@
         stopBankApprovalPolling();
       }
     } catch (e) {
-      stopBankApprovalPolling();
-      toast.error(e.response?.data?.message || e.response?.data?.error || 'Could not verify the bank approval status');
+      const terminalPollingError = e.response?.status === 403 || e.response?.status === 404;
+      bankApprovalPollError = e.response?.data?.message || e.response?.data?.error || 'The registry could not be reached. Automatic retry is still active.';
+      if (terminalPollingError) stopBankApprovalPolling();
+    } finally {
+      bankApprovalChecking = false;
     }
   }
 
@@ -432,12 +443,12 @@
             }}
           >
             {#if bankApprovalRequired}
-              <div class={bankApprovalStatusTone(bankApprovalStatus)}>
+              <div class={bankApprovalStatusTone(bankApprovalStatus)} role="status" aria-live="polite" aria-atomic="true">
                 <p class="font-medium">{bankApprovalMessage}</p>
                 <p class="mt-1 text-xs opacity-90">For: {bankApprovalIdentifierHint}</p>
               </div>
 
-              <div class="identity-auth-alert identity-auth-alert--info identity-auth-compact space-y-2 text-xs">
+              <div class="identity-auth-alert identity-auth-alert--info identity-auth-compact space-y-2 text-xs" role="status" aria-live="polite" aria-atomic="true" aria-busy={bankApprovalChecking}>
                 <p>Open one linked bank app and approve the request, then this page will continue automatically.</p>
                 <p>Status: <span class="font-semibold">{bankApprovalStatusLabel(bankApprovalStatus)}</span> · Expires in {fmtCountdown(bankApprovalExpiresIn)}</p>
                 {#if bankApprovalBanks.length}
@@ -452,11 +463,18 @@
                 {/if}
               </div>
 
+              {#if bankApprovalPollError}
+                <div class="identity-auth-alert identity-auth-alert--warn identity-auth-compact space-y-2 text-xs" role="alert">
+                  <p>{bankApprovalPollError}</p>
+                  <p>{bankApprovalTimer ? 'This page will retry automatically.' : 'Use retry or start a new sign-in request.'}</p>
+                </div>
+              {/if}
+
               <div class="grid gap-2">
-                <Button type="button" on:click={checkBankApprovalStatus} disabled={loading}>
-                  {loading ? 'Checking...' : 'Refresh approval status'}
+                <Button type="button" class="min-h-12" on:click={checkBankApprovalStatus} disabled={loading || bankApprovalChecking}>
+                  {bankApprovalChecking ? 'Checking...' : bankApprovalPollError ? 'Retry approval status' : 'Refresh approval status'}
                 </Button>
-                <Button type="button" variant="ghost" on:click={clearBankApprovalPrompt}>Use another sign-in method</Button>
+                <Button type="button" class="min-h-12" variant="ghost" on:click={clearBankApprovalPrompt}>Use another sign-in method</Button>
               </div>
             {:else if totpRequired}
               <Label for="identity-totp">Authenticator code</Label>
