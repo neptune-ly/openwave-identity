@@ -145,8 +145,12 @@ require_literal "${deploy}" '--mount "type=bind,src=${IDENTITY_UI_DIR},dst=/targ
 require_literal "${deploy}" '--entrypoint /usr/bin/chown "${identity_image_id}"' \
     'portal ownership helper must override the service Java entrypoint with the absolute chown binary'
 # shellcheck disable=SC2016
-require_literal "${deploy}" '-hR --one-file-system -- "${runner_uid}:${runner_gid}" /target' \
-    'portal ownership helper must not dereference symlinks or cross filesystems'
+require_literal "${deploy}" '-hR -- "${runner_uid}:${runner_gid}" /target' \
+    'portal ownership helper must not dereference the pre-validated symlink-free target'
+if grep -Fq -- '--one-file-system' "${deploy}"; then
+    printf 'release contract failed: the production image chown does not support --one-file-system\n' >&2
+    exit 1
+fi
 # shellcheck disable=SC2016
 require_literal "${deploy}" '\( ! -uid "${runner_uid}" -o ! -gid "${runner_gid}" \) -print -quit' \
     'portal ownership repair must verify every target entry after the helper exits'
