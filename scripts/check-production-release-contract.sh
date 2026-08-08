@@ -17,6 +17,7 @@ v18_recovery_workflow="${repo_root}/.github/workflows/recover-v18-receipt.yml"
 preflight_workflow="${repo_root}/.github/workflows/production-preflight.yml"
 deploy_workflow="${repo_root}/.github/workflows/deploy-service.yml"
 full_bank_issue_workflow="${repo_root}/.github/workflows/issue-full-bank-credential.yml"
+application_config="${repo_root}/src/main/resources/application.yml"
 
 require_literal() {
     local file="$1" literal="$2" message="$3"
@@ -348,6 +349,18 @@ reject_literal "${reset_password}" 'on:click=' \
     'password-reset buttons must use the shared Button native onclick prop'
 require_literal "${portal_login}" 'onclick={loginWithPasskey}' \
     'the passkey action must reach the native button through the shared Button onclick prop'
+# shellcheck disable=SC2016 # These are literal Spring placeholders, not shell substitutions.
+require_literal "${application_config}" 'enabled: ${MANAGEMENT_HEALTH_MAIL_ENABLED:false}' \
+    'optional SMTP availability must not make the core Identity health gate fail'
+# shellcheck disable=SC2016 # These are literal Spring placeholders, not shell substitutions.
+require_literal "${application_config}" 'connectiontimeout: ${SMTP_CONNECTION_TIMEOUT_MS:5000}' \
+    'SMTP connection attempts must have a bounded timeout'
+# shellcheck disable=SC2016 # These are literal Spring placeholders, not shell substitutions.
+require_literal "${application_config}" 'timeout: ${SMTP_READ_TIMEOUT_MS:5000}' \
+    'SMTP reads must have a bounded timeout'
+# shellcheck disable=SC2016 # These are literal Spring placeholders, not shell substitutions.
+require_literal "${application_config}" 'writetimeout: ${SMTP_WRITE_TIMEOUT_MS:5000}' \
+    'SMTP writes must have a bounded timeout'
 
 bash "${odyssey_contract}"
 
