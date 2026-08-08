@@ -20,6 +20,13 @@ require_literal() {
 
 require_literal "${preflight}" '--clean --if-exists --no-owner --no-privileges --exit-on-error' \
     'the disposable PostgreSQL restore must fail on schema/data errors without requiring production roles or ACLs'
+preflight_fingerprint_alias_count="$(grep -Foc -- "SELECT 'table:' || relname AS item" "${preflight}" || true)"
+deploy_fingerprint_alias_count="$(grep -Foc -- "SELECT 'table:' || relname AS item" "${deploy}" || true)"
+fingerprint_alias_count="$((preflight_fingerprint_alias_count + deploy_fingerprint_alias_count))"
+[ "${fingerprint_alias_count}" -eq 3 ] || {
+    printf 'release contract failed: every V18 fingerprint query must name its aggregate column\n' >&2
+    exit 1
+}
 if grep -Fq -- '--network host' "${preflight}" "${deploy}" "${repo_root}/scripts/openwave-prod-evidence-lib.sh"; then
     printf 'release contract failed: production DB proofs must use the live app network namespace\n' >&2
     exit 1
