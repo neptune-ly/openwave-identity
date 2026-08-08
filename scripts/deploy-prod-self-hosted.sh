@@ -77,8 +77,100 @@ pg_client() {
         postgres:16-alpine "$@"
 }
 
+ensure_identity_ui_runner_ownership() {
+    local runner_uid runner_gid canonical_ui_dir identity_cid identity_image_id identity_revision
+    local current_cid current_image unsafe_entry hardlinked_file ownership_mismatch unusable_entry
+
+    runner_uid="$(id -u)"
+    runner_gid="$(id -g)"
+    [[ "${runner_uid}" =~ ^[0-9]+$ && "${runner_gid}" =~ ^[0-9]+$ ]] \
+        || ow_fail "runner UID/GID could not be resolved safely"
+    [ "${IDENTITY_UI_DIR}" = /opt/openwave/ui/identity ] \
+        || ow_fail "portal ownership repair is restricted to the exact production target"
+    [ -d "${IDENTITY_UI_DIR}" ] && [ ! -L "${IDENTITY_UI_DIR}" ] \
+        || ow_fail "Identity UI target must be an existing non-symlink directory"
+    canonical_ui_dir="$(readlink -f -- "${IDENTITY_UI_DIR}")"
+    [ "${canonical_ui_dir}" = "${IDENTITY_UI_DIR}" ] \
+        || ow_fail "Identity UI target or one of its ancestors is a symlink"
+
+    # A recursive ownership repair must never cross into a nested bind mount or
+    # follow a retained symlink. Validate the host tree before exposing it to
+    # the constrained helper container.
+    if ! python3 - "${IDENTITY_UI_DIR}" <<'PY'
+import os
+import sys
+
+root = os.path.realpath(sys.argv[1])
+escapes = {r'\040': ' ', r'\011': '\t', r'\012': '\n', r'\134': '\\'}
+with open('/proc/self/mountinfo', encoding='utf-8') as mountinfo:
+    for line in mountinfo:
+        mountpoint = line.split()[4]
+        for escaped, value in escapes.items():
+            mountpoint = mountpoint.replace(escaped, value)
+        if mountpoint == root or mountpoint.startswith(root + os.sep):
+            raise SystemExit(1)
+PY
+    then
+        ow_fail "Identity UI target contains an unexpected mount point"
+    fi
+    unsafe_entry="$(find "${IDENTITY_UI_DIR}" -xdev ! -type d ! -type f -print -quit)" \
+        || ow_fail "Identity UI target could not be inspected safely"
+    [ -z "${unsafe_entry}" ] \
+        || ow_fail "Identity UI target must contain only directories and regular files"
+    hardlinked_file="$(find "${IDENTITY_UI_DIR}" -xdev -type f -links +1 -print -quit)" \
+        || ow_fail "Identity UI link counts could not be inspected safely"
+    [ -z "${hardlinked_file}" ] \
+        || ow_fail "Identity UI target must not contain hard-linked files"
+
+    ownership_mismatch="$(find "${IDENTITY_UI_DIR}" -xdev \
+        \( ! -uid "${runner_uid}" -o ! -gid "${runner_gid}" \) -print -quit)" \
+        || ow_fail "Identity UI ownership could not be inspected"
+    if [ -n "${ownership_mismatch}" ]; then
+        identity_cid="$(ow_live_compose_service_id "${COMPOSE_DIR}" "${COMPOSE_FILE}" "${PRODUCTION_ENV_FILE}" identity)"
+        identity_image_id="$(docker inspect -f '{{.Image}}' "${identity_cid}")"
+        [[ "${identity_image_id}" =~ ^sha256:[0-9a-f]{64}$ ]] \
+            || ow_fail "live Identity image ID is not immutable"
+        identity_revision="$(docker inspect -f '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "${identity_cid}")"
+        [ "${identity_revision}" = "${ROLLBACK_SHA}" ] \
+            || ow_fail "live Identity image revision does not match the production checkout"
+
+        # Re-resolve immediately before the mount. A manual container swap that
+        # races the shared deploy lock must fail closed, never broaden the
+        # ownership target or silently trust another image.
+        current_cid="$(ow_live_compose_service_id "${COMPOSE_DIR}" "${COMPOSE_FILE}" "${PRODUCTION_ENV_FILE}" identity)"
+        current_image="$(docker inspect -f '{{.Image}}' "${current_cid}")"
+        [ "${current_cid}" = "${identity_cid}" ] && [ "${current_image}" = "${identity_image_id}" ] \
+            || ow_fail "live Identity container changed during portal ownership proof"
+
+        log "Normalizing ownership of the exact Identity portal target for the runner account."
+        if ! docker run --rm --pull=never --network none --read-only \
+            --cap-drop ALL --cap-add CHOWN \
+            --security-opt no-new-privileges=true --user 0:0 \
+            --mount "type=bind,src=${IDENTITY_UI_DIR},dst=/target,bind-propagation=rprivate" \
+            --entrypoint /usr/bin/chown "${identity_image_id}" \
+            -hR --one-file-system -- "${runner_uid}:${runner_gid}" /target; then
+            ow_fail "bounded Identity portal ownership repair failed before checkout"
+        fi
+        current_cid="$(ow_live_compose_service_id "${COMPOSE_DIR}" "${COMPOSE_FILE}" "${PRODUCTION_ENV_FILE}" identity)"
+        [ "${current_cid}" = "${identity_cid}" ] \
+            || ow_fail "live Identity container changed during portal ownership repair"
+    fi
+
+    ownership_mismatch="$(find "${IDENTITY_UI_DIR}" -xdev \
+        \( ! -uid "${runner_uid}" -o ! -gid "${runner_gid}" \) -print -quit)" \
+        || ow_fail "repaired Identity UI ownership could not be verified"
+    [ -z "${ownership_mismatch}" ] \
+        || ow_fail "Identity UI ownership repair did not cover the exact target tree"
+    unusable_entry="$(find "${IDENTITY_UI_DIR}" -xdev \
+        \( ! -readable -o \( -type d \( ! -writable -o ! -executable \) \) \) -print -quit)" \
+        || ow_fail "Identity UI access could not be verified"
+    [ -z "${unusable_entry}" ] \
+        || ow_fail "Identity UI tree is not readable and directory-writable by the runner"
+}
+
 ow_validate_release_sha "${DEPLOY_REF}"
 ow_require_command sha256sum
+ow_require_command readlink
 [ -d "${RELEASE_WORKSPACE}/.git" ] || ow_fail "Actions release workspace is not a git checkout"
 [ "$(git -C "${RELEASE_WORKSPACE}" rev-parse HEAD)" = "${DEPLOY_REF}" ] \
     || ow_fail "Actions deploy checkout does not equal the immutable release SHA"
@@ -197,7 +289,9 @@ clear_git_url_rewrites() {
             exit 1
             ;;
     esac
-    mkdir -p "${IDENTITY_UI_DIR}"
+    [ -d "${IDENTITY_UI_DIR}" ] && [ ! -L "${IDENTITY_UI_DIR}" ] \
+        || ow_fail "Identity UI target must be provisioned as a real directory"
+    ensure_identity_ui_runner_ownership
     ui_public_origin="$(python3 - "${PUBLIC_UI_URL}" <<'PY'
 import sys
 from urllib.parse import urlsplit

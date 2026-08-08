@@ -116,6 +116,45 @@ require_literal "${deploy}" 'mapfile -t ui_asset_paths' \
 # shellcheck disable=SC2016
 require_literal "${deploy}" 'UI_ROLLBACK_DIR="${UI_ROLLBACK_DIR:-${RUNTIME_DIR}/ui-rollbacks/identity}"' \
     'portal rollback bundles must live in the runner-owned release namespace'
+# These are literal deploy expressions that constrain the one-time ownership
+# repair to the exact pre-provisioned portal tree and the live immutable image.
+# shellcheck disable=SC2016
+require_literal "${deploy}" '[ "${canonical_ui_dir}" = "${IDENTITY_UI_DIR}" ]' \
+    'portal ownership repair must reject a symlinked target or ancestor'
+require_literal "${deploy}" "with open('/proc/self/mountinfo', encoding='utf-8') as mountinfo:" \
+    'portal ownership repair must reject nested host mount points'
+# shellcheck disable=SC2016
+require_literal "${deploy}" 'find "${IDENTITY_UI_DIR}" -xdev ! -type d ! -type f -print -quit' \
+    'portal ownership repair must reject symlinks and special filesystem objects'
+# shellcheck disable=SC2016
+require_literal "${deploy}" 'find "${IDENTITY_UI_DIR}" -xdev -type f -links +1 -print -quit' \
+    'portal ownership repair must reject hard links that could affect an inode outside the target'
+# shellcheck disable=SC2016
+require_literal "${deploy}" '[[ "${identity_image_id}" =~ ^sha256:[0-9a-f]{64}$ ]]' \
+    'portal ownership repair must use an immutable live image ID, never a tag'
+require_literal "${deploy}" '--pull=never --network none --read-only' \
+    'portal ownership helper must not pull, use the network, or write its root filesystem'
+require_literal "${deploy}" '--cap-drop ALL --cap-add CHOWN' \
+    'portal ownership helper must retain only the ownership capability'
+require_literal "${deploy}" '--security-opt no-new-privileges=true --user 0:0' \
+    'portal ownership helper must prohibit privilege escalation and explicitly select its user'
+# shellcheck disable=SC2016
+require_literal "${deploy}" '--mount "type=bind,src=${IDENTITY_UI_DIR},dst=/target,bind-propagation=rprivate"' \
+    'portal ownership helper must bind only the exact validated target'
+# shellcheck disable=SC2016
+require_literal "${deploy}" '--entrypoint /usr/bin/chown "${identity_image_id}"' \
+    'portal ownership helper must override the service Java entrypoint with the absolute chown binary'
+# shellcheck disable=SC2016
+require_literal "${deploy}" '-hR --one-file-system -- "${runner_uid}:${runner_gid}" /target' \
+    'portal ownership helper must not dereference symlinks or cross filesystems'
+# shellcheck disable=SC2016
+require_literal "${deploy}" '\( ! -uid "${runner_uid}" -o ! -gid "${runner_gid}" \) -print -quit' \
+    'portal ownership repair must verify every target entry after the helper exits'
+# shellcheck disable=SC2016
+if grep -Fq -- 'mkdir -p "${IDENTITY_UI_DIR}"' "${deploy}"; then
+    printf 'release contract failed: Docker ownership repair must require a pre-provisioned portal directory\n' >&2
+    exit 1
+fi
 # shellcheck disable=SC2016
 require_literal "${deploy}" 'mktemp -d "${UI_ROLLBACK_DIR}/.identity.rollback-pending-${ROLLBACK_SHA}.XXXXXX"' \
     'portal rollback creation must not require write access to the public UI parent'
@@ -126,13 +165,17 @@ require_literal "${deploy}" 'mv -- "${ui_backup_pending}" "${ui_backup_dir}"' \
 # shellcheck disable=SC2016
 ui_backup_line="$(grep -nF -- 'ui_backup_pending="$(mktemp -d "${UI_ROLLBACK_DIR}/.identity.rollback-pending-${ROLLBACK_SHA}.XXXXXX")"' "${deploy}" | cut -d: -f1)"
 # shellcheck disable=SC2016
+ui_ownership_line="$(grep -nFx -- '    ensure_identity_ui_runner_ownership' "${deploy}" | cut -d: -f1)"
+# shellcheck disable=SC2016
 ui_backup_finalize_line="$(grep -nF -- 'mv -- "${ui_backup_pending}" "${ui_backup_dir}"' "${deploy}" | cut -d: -f1)"
 # shellcheck disable=SC2016
 checkout_line="$(grep -nF -- 'git checkout --detach "${RESOLVED_REF}"' "${deploy}" | cut -d: -f1)"
-[[ "${ui_backup_line}" =~ ^[0-9]+$ && "${ui_backup_finalize_line}" =~ ^[0-9]+$ && "${checkout_line}" =~ ^[0-9]+$ \
+[[ "${ui_ownership_line}" =~ ^[0-9]+$ && "${ui_backup_line}" =~ ^[0-9]+$ \
+    && "${ui_backup_finalize_line}" =~ ^[0-9]+$ && "${checkout_line}" =~ ^[0-9]+$ \
+    && "${ui_ownership_line}" -lt "${ui_backup_line}" \
     && "${ui_backup_line}" -lt "${ui_backup_finalize_line}" \
     && "${ui_backup_finalize_line}" -lt "${checkout_line}" ]] || {
-    printf 'release contract failed: the complete portal rollback must be allocated and finalized before host checkout mutation\n' >&2
+    printf 'release contract failed: portal ownership and complete rollback must finish before host checkout mutation\n' >&2
     exit 1
 }
 # This is the literal deploy expression to enforce.
